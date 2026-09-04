@@ -32,7 +32,7 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 - Reuse Flutter Engine's existing DDM GN/CI route. **Confirmed:** pinned 3.41.9 already defines Android and iOS DDM builders and archives; no new flag plumbing is needed.
 - Join verification/storage with the real loader. **Passed:** identity, length and digest gate → atomic store → pending boot → rehash → DBC3 activation → healthy commit; tampering stays baseline.
 - Disable cross-function inlining only for updateable business packages.
-- Implement AOT↔interpreter bridges, then object/async/exception/GC/isolate gates. **Host GC, exception, basic async and isolate-local dispatch passed; long-running churn remains.**
+- Implement AOT↔interpreter bridges, then object/async/exception/GC/isolate gates. **Host GC, exception, async and 16-isolate bounded churn passed; multi-hour platform soak remains.**
 
 **Accept:** ordinary Dart compiles without business instrumentation; generated AOT patch points route both directions; the semantic corpus and performance budget pass.
 **Stop:** stable linkage requires manual business registration, or patch points impose unacceptable baseline overhead.

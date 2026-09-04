@@ -43,6 +43,7 @@ Verified properties:
 - valid DBC3 bytes are atomically staged, selected as pending boot, rehashed from final storage, activated, executed and only then marked healthy; tampering of the stored artifact selects bundled baseline.
 - 20,000 interpreted calls allocate temporary objects while `--verbose-gc` confirms scavenges; the same module propagates an interpreted exception into AOT and completes interpreted async code that awaits and calls AOT.
 - dynamic libraries are isolate-group scoped while dispatch globals are isolate-local; the main isolate loads once and sends the validated interpreted closure table to a child isolate, which starts on baseline and then executes the patch.
+- a bounded concurrent churn runs 16 child isolates; each performs 1,000 synchronous interpreted calls, 10 async interpreted calls and an interpreted exception crossing before clean completion.
 - all 38 upstream AOT dynamic-module semantic tests pass with zero failure logs; dedicated GC, exception, isolate and long-running async stress are not claimed by that suite.
 - Android produces an AArch64 ELF PIE containing the dynamic loader, DBC3 bytecode reader and interpreter; no device was accessed and Flutter Engine integration remains unproven.
 - iOS compiles the dynamic-enabled VM, bytecode reader and interpreter objects, then the standalone CLI target hits an exported/unexported-symbol-list linker conflict; only the real Flutter Engine link can close this gate.

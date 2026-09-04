@@ -65,8 +65,9 @@ libraries are isolate-group scoped, so a child isolate cannot load the same
 module URI again. Patch dispatch state is isolate-local. The working model is
 to load once in the group, then send the validated interpreted closure table to
 each child isolate; the child starts on baseline, installs that table, and
-successfully executes the patched FunctionId. Long-running isolate/async churn
-remains a stress gate.
+successfully executes the patched FunctionId. A bounded concurrent run of 16
+child isolates, each making 1,000 synchronous calls, 10 async calls and one
+exception crossing, passes. A multi-hour soak remains a later platform gate.
 
 Reproduction uses a Dart SDK source checkout at the pinned revision:
 
@@ -125,7 +126,7 @@ Required work:
 2. Replace the temporary JSON opcode interpreter with DBC3 modules.
 3. Generate the proven `FunctionId -> interpreted closure` table from real Kernel diffs; unpatched IDs keep the installed AOT entry.
 4. Preserve the existing signed manifest, strong release binding, atomic store and boot rollback outside the experimental loader.
-5. Add long-running isolate/async churn before Flutter tests; the upstream suite plus host GC/exception/basic-async/isolate bridge gates pass.
+5. Add a multi-hour platform soak before release; the upstream suite plus bounded host GC/exception/async/isolate churn gates pass.
 6. Vendor only exact pinned BSD-licensed upstream source changes and assume breaking changes on every Dart upgrade.
 
 ## Stop conditions

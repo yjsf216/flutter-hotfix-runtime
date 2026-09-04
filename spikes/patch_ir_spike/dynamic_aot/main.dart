@@ -123,13 +123,31 @@ Future<void> main() async {
     throw StateError('interpreted async did not cross AOT');
   }
   final loadedPatches = activePatches();
-  final isolatePassed = await Isolate.run(() async {
-    final isolatedPricing = Pricing();
-    if (isolatedPricing.quote(3) != 4) return false;
-    installPatches(loadedPatches);
-    return isolatedPricing.quote(3) == 37;
-  });
-  if (!isolatePassed) throw StateError('isolate-local patch state failed');
+  final isolateResults = await Future.wait(
+    List.generate(
+      16,
+      (_) => Isolate.run(() async {
+        final isolatedPricing = Pricing();
+        if (isolatedPricing.quote(3) != 4) return false;
+        installPatches(loadedPatches);
+        for (var i = 0; i < 1000; i++) {
+          if (isolatedPricing.quote(3) != 37) return false;
+        }
+        for (var i = 0; i < 10; i++) {
+          if (await isolatedPricing.asyncQuote(3) != 37) return false;
+        }
+        try {
+          isolatedPricing.fail();
+          return false;
+        } on StateError catch (error) {
+          return error.message == 'interpreted failure';
+        }
+      }),
+    ),
+  );
+  if (isolateResults.any((passed) => !passed)) {
+    throw StateError('isolate-local patch churn failed');
+  }
   print(
     'PASS: verified store + GC/exception/async/isolate AOT <-> interpreted closures',
   );
