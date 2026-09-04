@@ -50,6 +50,7 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 - Port the already-tested shared IR/interpreter/linker core to iOS without downloaded machine code.
 - Pass App Review/legal, GC, exception, isolate, Flutter and performance gates.
 - Port the same core through the OHOS ArkTS/N-API embedder and repeat the corpus.
+- **OHOS source gate passed:** its pinned Dart 3.6.2 already contains DBC3/KBC, and the Engine's existing `--gn-args` path accepts `dart_dynamic_modules=true`; arm64 HAR build remains pending.
 
 **Accept feasibility:** no downloaded machine code; deterministic linker; semantic parity corpus passes on each platform; overhead and patch size meet explicit budgets; store/legal gates are positive.
 **Stop:** any correctness gap in GC/exception/isolate safety, required private Shorebird source, unacceptable performance, or policy rejection.
