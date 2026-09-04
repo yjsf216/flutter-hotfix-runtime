@@ -7,7 +7,12 @@ const logicalLibraryUri = 'package:patch_ir_spike/business.dart';
 
 void main() {
   final output = Directory('.dart_tool')..createSync(recursive: true);
-  for (final name in ['baseline', 'updated']) {
+  for (final name in [
+    'baseline',
+    'updated',
+    'field_changed',
+    'signature_changed',
+  ]) {
     final source = File('fixtures/$name.dart').readAsStringSync();
     if (source.contains('@') ||
         source.contains('HotSwap') ||
@@ -37,7 +42,23 @@ void main() {
 
   final baseline = loadProgram('${output.path}/baseline.dill', 'baseline.dart');
   final updated = loadProgram('${output.path}/updated.dill', 'updated.dart');
-  if (baseline.classId != updated.classId) throw StateError('unstable ClassId');
+  checkCompatible(baseline, updated);
+  expectIncompatible(
+    baseline,
+    loadProgram('${output.path}/field_changed.dill', 'field_changed.dart'),
+    'instance field layout',
+  );
+  expectIncompatible(
+    baseline,
+    loadProgram(
+      '${output.path}/signature_changed.dill',
+      'signature_changed.dart',
+    ),
+    'existing method signature',
+  );
+  print(
+    'PASS: Kernel compatibility rejects field layout and signature changes',
+  );
 
   final metadata = <String, Object?>{};
   for (final method in baseline.methods) {
@@ -124,7 +145,18 @@ KernelProgram loadProgram(String dillPath, String sourceName) {
     (value) => value.name == 'GreetingService',
   );
   final classId = stableId('$logicalLibraryUri::${klass.name}');
-  final program = KernelProgram(klass.name, classId);
+  final instanceFields = klass.fields
+      .where((field) => !field.isStatic)
+      .map(
+        (field) => [
+          field.name.text,
+          field.type.getDisplayString(),
+          field.isFinal,
+          field.isLate,
+        ].join('|'),
+      )
+      .toList();
+  final program = KernelProgram(klass.name, classId, instanceFields);
   for (final procedure in klass.procedures.where(
     (value) => !value.isSynthetic,
   )) {
@@ -142,6 +174,41 @@ KernelProgram loadProgram(String dillPath, String sourceName) {
     program.byId[method.functionId] = method;
   }
   return program;
+}
+
+void checkCompatible(KernelProgram baseline, KernelProgram candidate) {
+  if (baseline.classId != candidate.classId) {
+    throw const FormatException('class identity changed');
+  }
+  if (jsonEncode(baseline.instanceFields) !=
+      jsonEncode(candidate.instanceFields)) {
+    throw const FormatException('instance field layout changed');
+  }
+  for (final old in baseline.methods) {
+    final matches = candidate.methods.where(
+      (method) =>
+          method.name == old.name &&
+          method.procedure.kind == old.procedure.kind &&
+          method.procedure.isStatic == old.procedure.isStatic,
+    );
+    if (matches.length != 1 || matches.single.signature != old.signature) {
+      throw FormatException('existing method signature changed: ${old.name}');
+    }
+  }
+}
+
+void expectIncompatible(
+  KernelProgram baseline,
+  KernelProgram candidate,
+  String expected,
+) {
+  try {
+    checkCompatible(baseline, candidate);
+  } on FormatException catch (error) {
+    if (error.message.toString().contains(expected)) return;
+    rethrow;
+  }
+  throw StateError('$expected was accepted');
 }
 
 String functionSignature(Procedure procedure) {
@@ -359,9 +426,10 @@ void main() {
 }
 
 class KernelProgram {
-  KernelProgram(this.className, this.classId);
+  KernelProgram(this.className, this.classId, this.instanceFields);
   final String className;
   final String classId;
+  final List<String> instanceFields;
   final List<KernelMethod> methods = [];
   final Map<Procedure, KernelMethod> byProcedure = {};
   final Map<String, KernelMethod> byId = {};
