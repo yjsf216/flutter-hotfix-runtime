@@ -45,7 +45,9 @@ Flutter Engine integration or Android, iOS, or OHOS support.
 The repository's `run_dynamic_aot.sh` adds the hotfix-specific bridge: a DBC3
 entry point returns a validated `FunctionId -> closure` table, an existing AOT
 method calls the interpreted closure, and that closure calls a retained AOT
-method. A malformed table is rejected transactionally before activation.
+method. A malformed table is rejected transactionally before activation. The
+same executable rejects a mismatched release manifest and SHA-256/length disk
+tampering before calling the experimental loader, while continuing baseline.
 
 The complete upstream AOT dynamic-module suite also passes: 38/38 tests with
 zero failure logs. It covers constants, closures, checked invocation, records,

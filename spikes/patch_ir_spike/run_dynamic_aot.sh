@@ -57,4 +57,26 @@ compile_kernel --no-aot "$tmp_dir/main_no_aot.dill"
   --output "$tmp_dir/modules/patch.dart.bytecode" \
   dev-hotfix:/modules/patch.dart
 
+ir_sha256=$(shasum -a 256 "$tmp_dir/modules/patch.dart.bytecode" | awk '{print $1}')
+ir_length=$(wc -c < "$tmp_dir/modules/patch.dart.bytecode" | tr -d ' ')
+printf '%s\n' \
+  '{' \
+  '  "signature": "valid-signature",' \
+  '  "baselineId": "dbc3-host-baseline-v1",' \
+  '  "identity": {' \
+  '    "appId": "dev.hotfixruntime.fixture",' \
+  '    "platform": "host",' \
+  '    "abi": "arm64",' \
+  '    "release": "1.0.0+1",' \
+  '    "dartVersion": "3.11.5",' \
+  '    "engineRevision": "42d3d75a56efe1a2e9902f52dc8006099c45d937"' \
+  '  },' \
+  "  \"irLength\": $ir_length," \
+  "  \"irSha256\": \"$ir_sha256\"" \
+  '}' > "$tmp_dir/manifest.json"
+sed 's/dbc3-host-baseline-v1/wrong-baseline/' \
+  "$tmp_dir/manifest.json" > "$tmp_dir/bad-manifest.json"
+cp "$tmp_dir/modules/patch.dart.bytecode" "$tmp_dir/modules/tampered.bytecode"
+printf 'x' >> "$tmp_dir/modules/tampered.bytecode"
+
 (cd "$tmp_dir" && "$out_dir/dartaotruntime_product" main.snapshot)
