@@ -46,7 +46,7 @@ This compiles ordinary Dart sources through the pinned Dart CFE/Kernel into stab
 
 The external `libapp.so` work is retained only as loading-chain research and an AOT performance baseline. It is not the Android store production backend.
 
-See [TECHNICAL_ROUTE.md](TECHNICAL_ROUTE.md), [ARCHITECTURE.md](ARCHITECTURE.md), [PLAN.md](PLAN.md), [COMPATIBILITY.md](COMPATIBILITY.md), and [SECURITY.md](SECURITY.md).
+See [TECHNICAL_ROUTE.md](TECHNICAL_ROUTE.md), [DYNAMIC_MODULES_AUDIT.md](DYNAMIC_MODULES_AUDIT.md), [ARCHITECTURE.md](ARCHITECTURE.md), [PLAN.md](PLAN.md), [COMPATIBILITY.md](COMPATIBILITY.md), and [SECURITY.md](SECURITY.md).
 
 ## Explicit non-goals for now
 

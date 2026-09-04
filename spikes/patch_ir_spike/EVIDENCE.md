@@ -12,6 +12,7 @@ PASS: every release identity mismatch -> baseline
 PASS: transformed AOT entry -> changed IR -> baseline AOT/new IR
 PASS: SHA-256 + atomic files + pending boot + LKG + blacklist + withdrawal
 PASS: invalid path/digest/state and disk tamper -> safe fallback
+GAP: prebuilt AOT runtime has dart_dynamic_modules=false
 ```
 
 Verified properties:
@@ -29,6 +30,7 @@ Verified properties:
 - a compiler-side Kernel AST transform injects patch checks into ordinary business methods, writes a new `.dill`, and compiles it to a native executable;
 - the transformed instance AOT entry dispatches to changed IR; that IR calls both an unchanged baseline AOT static method and a new patch-private IR method; an unselected direct static call still executes its original AOT body.
 - transformed Kernel inspection shows one compiler-injected `vm:never-inline` annotation and a `hotfixHasPatch`/`hotfixInvoke` entry guard on every patchable business method.
+- the pinned upstream `dart2bytecode` AOT snapshot emits a 945-byte DBC3 v1 module from the fixture; the stock AOT runtime's explicit unsupported result proves a custom `dart_dynamic_modules=true` build is required.
 - the host store rehashes the final file before selection/health, detects disk tampering, rolls back after two incomplete boots, persists last-known-good and handles signed withdrawal input.
 
 Deliberate spike limits: AOT entry bindings are generated Dart closures, new functions are static and patch-private, the signature token tests the verifier boundary rather than cryptography, and Kernel-to-IR opcodes cover only arguments, constants, integer/string addition, comparison, branch, call and return. The existing P-256 signing smoke separately verifies the cryptographic contract.

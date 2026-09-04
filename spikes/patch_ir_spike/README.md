@@ -11,3 +11,5 @@ The Kernel-to-IR compiler intentionally supports only the fixture's static/insta
 The build also transforms the CFE Kernel AST to inject method-entry patch points, serializes the transformed `.dill`, and compiles it to a native executable. The executable proves `AOT entry -> changed IR -> unchanged baseline AOT/new IR` plus an unselected direct AOT path, without changing the business source.
 
 The same command also compiles and runs the host patch-store check: SHA-256, atomic file replacement, final-file rehash, `PENDING_BOOT`, last-known-good, two-failure blacklist, withdrawal, tamper detection and bundled fail-open.
+
+It additionally compiles the fixture with Dart's upstream experimental `dart2bytecode` into DBC3. The stock Flutter SDK AOT runtime is expected to report `dart_dynamic_modules=false`; a positive execution check replaces this negative gate after the custom Runtime build exists.

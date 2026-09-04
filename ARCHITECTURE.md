@@ -53,7 +53,7 @@ Only a fully verified staged directory may be atomically renamed to `active`. `P
 
 ### Unified execution backend
 
-All three platforms ship baseline AOT, a Patch IR interpreter, stable class/function metadata, a dispatch table, and AOT↔interpreter bridges. The customized frontend/compiler inserts patch points automatically; business Dart remains ordinary source. Unchanged functions use bundled AOT and changed/new functions use signed non-machine-code IR.
+All three platforms ship baseline AOT, the pinned upstream DBC3/KBC dynamic-module runtime, stable class/function metadata, a dispatch table, and AOT↔interpreter bridges. The customized frontend/compiler inserts patch points automatically; business Dart remains ordinary source. Unchanged functions use bundled AOT and changed/new functions use signed non-machine-code bytecode.
 
 ### Android first
 

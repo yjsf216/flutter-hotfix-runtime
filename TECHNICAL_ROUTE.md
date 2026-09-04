@@ -65,7 +65,9 @@ BUNDLED -> VERIFIED -> STAGED -> PENDING_BOOT -> HEALTHY -> LAST_KNOWN_GOOD
 
 ### Patch IR
 
-先从整数、字符串、参数、分支、调用、返回开始，再依次扩展对象字段读取、虚调用、闭包/泛型、async/异常、GC、isolate 和 Flutter Widget。IR 有版本、长度、opcode allowlist、栈深和跳转目标校验；验证完成前不得进入解释器。
+产品 Patch IR 以固定 Dart revision 的上游 DBC3 bytecode 为基础，而不是长期维护自定义 opcode。Dart 3.11.5 已包含实验性的 `dart2bytecode`、dynamic module loader、KBC interpreter、解释↔AOT 调用、GC root visitation 和异常/async 栈支持；Flutter product Runtime 必须显式以 `dart_dynamic_modules=true` 重建。
+
+当前 JSON opcode 仅作为可审计的语义 oracle，待 dynamic-enabled Runtime 通过后删除。DBC3 仍需外层版本、长度、SHA-256、签名和 release identity 校验；上游 dynamic-interface YAML 用作可调用 baseline API allowlist。
 
 ### AOT linker/bridge
 
@@ -91,8 +93,8 @@ Android 是低成本研发平台：先验证 IR、dispatch、AOT bridge、GC 和
 1. **语义 spike（已通过）**：Dart CFE 把普通 fixture 编译为 Kernel；自动生成稳定 ID；单方法 diff；最小 IR；baseline/AOT 与 patch/interpreter dispatch；坏签名、baselineId、签名结构和 IR 均 fail-open。
 2. **Dart frontend 接入（进行中）**：把当前 Kernel reader 移入上游 frontend 编译流水线，直接输出 metadata/IR 并生成 patch points；如果必须手工注册则停止。
 3. **AOT patch points**：业务 package 禁止跨函数内联并生成 dispatch table；性能损失超过预算则重新划定可更新 package，而不是全局关闭优化。
-4. **对象与控制流**：字段读取、虚调用、闭包/泛型、async/异常逐级通过语义 corpus。
-5. **VM 正确性**：GC root、barrier、safepoint、isolate；任何偶发内存错误都停止产品化。
+4. **上游 dynamic modules**：以 `dart_dynamic_modules=true` 构建锁定 VM/Engine，DBC3 替换临时 JSON IR。
+5. **VM 正确性**：复用并扩展上游字段、虚调用、闭包/泛型、async/异常、GC root、barrier、safepoint、isolate 测试；任何偶发内存错误都停止产品化。
 6. **Flutter 集成**：Widget、element/state、frame、plugin baseline API 回归。
 7. **Android 生产门**：灰度、撤回、崩溃回滚、审计、Play 政策评估。
 8. **iOS 与 OHOS**：复用同一 corpus，分别通过平台和市场门后才声明支持。
@@ -100,6 +102,8 @@ Android 是低成本研发平台：先验证 IR、dispatch、AOT bridge、GC 和
 ## 一手资料
 
 - [Flutter AOT operation](https://github.com/flutter/flutter/blob/3.41.9/docs/engine/Flutter-engine-operation-in-AOT-Mode.md)
+- [Dart upstream dart2bytecode](https://github.com/dart-lang/sdk/tree/3.11.5/pkg/dart2bytecode)
+- [Dart upstream dynamic modules](https://github.com/dart-lang/sdk/tree/3.11.5/pkg/dynamic_modules)
 - [Flutter snapshot resolver](https://github.com/flutter/flutter/blob/3.41.9/engine/src/flutter/runtime/dart_snapshot.cc)
 - [Shorebird system architecture](https://docs.shorebird.dev/code-push/system-architecture/)
 - [Shorebird public code-push design notes](https://github.com/shorebirdtech/shorebird/blob/main/NOTES_ON_CODEPUSH.md)

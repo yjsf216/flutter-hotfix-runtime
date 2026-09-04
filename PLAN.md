@@ -25,7 +25,8 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 ## M2 — Dart frontend and AOT patch points (host entry transform passed)
 
 - Integrate the proven external Kernel transform into the upstream Dart frontend pipeline.
-- Replace generated Dart closures with native AOT entry metadata and bridge calls.
+- Build the pinned host VM with `dart_dynamic_modules=true` and execute generated DBC3.
+- Map FunctionId patch points to upstream interpreted `Function` objects and installed AOT entries.
 - Disable cross-function inlining only for updateable business packages.
 - Implement AOT↔interpreter bridges, then object/async/exception/GC/isolate gates.
 
