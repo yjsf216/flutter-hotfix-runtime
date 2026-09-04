@@ -1,0 +1,20 @@
+{
+  "abi": "arm64-v8a",
+  "appId": "dev.hotfixruntime.android_spike",
+  "artifactSha256": "15183de4d9eaaa1da35886b8f933740f119199486f4884d8dbbc04ce2cefc763",
+  "artifactSize": 2818992,
+  "buildParametersSha256": "d4ca340739925e8f4a854a9c4ed6069cc9f687c900a6c3eb509fa070cad0fbb4",
+  "channel": "stable",
+  "dartVersion": "3.11.5",
+  "engineRevision": "42d3d75a56",
+  "flavor": "production",
+  "flutterRevision": "00b0c91f06209d9e4a41f71b7a512d6eb3b9c694",
+  "issuedAt": "2026-09-04T04:00:00Z",
+  "keyId": "spike-p256-1",
+  "patchId": "android-arm64-001",
+  "platform": "android",
+  "release": "1.0.0+1",
+  "revoked": false,
+  "schemaVersion": 1,
+  "signatureAlgorithm": "ECDSA_P256_SHA256"
+}
