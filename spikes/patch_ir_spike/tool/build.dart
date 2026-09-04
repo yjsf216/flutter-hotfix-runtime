@@ -134,18 +134,34 @@ Future<void> main() async {
   File('${output.path}/generated_runner.dart').writeAsStringSync(
     generateRunner(baseline, baselineId, identity, metadata, patch),
   );
-  await buildPatchPointDill(output, baseline);
+  await buildPatchPointDill(
+    output,
+    baseline,
+    baselineId,
+    identity,
+    metadata,
+    patch,
+  );
 }
 
 Future<void> buildPatchPointDill(
   Directory output,
   KernelProgram baseline,
+  String baselineId,
+  Map<String, Object?> identity,
+  Map<String, Object?> metadata,
+  Map<String, Object?> patch,
 ) async {
-  final describeId = baseline.byName('describe').functionId;
+  final bindings = baselineBindings(baseline);
+  final identityJson = jsonEncode(identity);
+  final metadataJson = jsonEncode(metadata);
+  final patchJson = jsonEncode(patch);
   final entry = File('${output.path}/patch_point_entry.dart')
     ..writeAsStringSync('''
+import 'dart:convert';
 import '../fixtures/baseline.dart';
 import '../fixtures/patch_hook.dart' as hook;
+import '../runtime.dart';
 
 void check(bool value) {
   if (!value) throw StateError('Kernel patch-point check failed');
@@ -154,11 +170,23 @@ void check(bool value) {
 void main() {
   final service = GreetingService();
   check(service.describe(15) == 'base:high');
-  hook.isPatched = (id) => id == '$describeId';
-  hook.dispatch = (id, receiver, arguments) => 'patched-via-kernel';
-  check(service.describe(15) == 'patched-via-kernel');
+  final metadata = (jsonDecode(r\'''$metadataJson\''') as Map<String, Object?>)
+      .map((key, value) => MapEntry(key, value as Map<String, Object?>));
+  final patch = jsonDecode(r\'''$patchJson\''') as Map<String, Object?>;
+  final runtime = PatchRuntime(
+    baselineId: '$baselineId',
+    releaseIdentity: jsonDecode(r\'''$identityJson\''') as Map<String, Object?>,
+    metadata: metadata,
+    baselineFunctions: {$bindings},
+  );
+  check(runtime.install(patch));
+  hook.isPatched = runtime.hasPatch;
+  hook.dispatch = runtime.invoke;
+  check(service.describe(15) == 'base:patched-low!');
+  check(runtime.interpreterHits == 2 && runtime.baselineHits == 1);
   check(GreetingService.decorate('direct') == 'base:direct');
-  print('PASS: transformed Kernel method entry dispatches before baseline AOT body');
+  check(runtime.interpreterHits == 2 && runtime.baselineHits == 1);
+  print('PASS: transformed AOT entry -> changed IR -> baseline AOT/new IR');
 }
 ''');
   final result = Process.runSync(Platform.resolvedExecutable, [
@@ -414,19 +442,7 @@ String generateRunner(
   Map<String, Object?> metadata,
   Map<String, Object?> patch,
 ) {
-  final bindings = program.methods
-      .map((method) {
-        final function = method.procedure.function;
-        final args = [
-          for (var i = 0; i < function.positionalParameters.length; i++)
-            'args[$i] as ${function.positionalParameters[i].type.getDisplayString()}',
-        ].join(', ');
-        final target = method.procedure.isStatic
-            ? 'app.${program.className}.${method.name}($args)'
-            : '(receiver as app.${program.className}).${method.name}($args)';
-        return "'${method.functionId}': (receiver, args) => $target";
-      })
-      .join(',\n');
+  final bindings = baselineBindings(program, prefix: 'app.');
   final describe = program.byName('describe').functionId;
   final decorate = program.byName('decorate').functionId;
   final identityJson = jsonEncode(identity);
@@ -509,6 +525,21 @@ void main() {
 }
 """;
 }
+
+String baselineBindings(KernelProgram program, {String prefix = ''}) => program
+    .methods
+    .map((method) {
+      final function = method.procedure.function;
+      final args = [
+        for (var i = 0; i < function.positionalParameters.length; i++)
+          'args[$i] as ${function.positionalParameters[i].type.getDisplayString()}',
+      ].join(', ');
+      final target = method.procedure.isStatic
+          ? '$prefix${program.className}.${method.name}($args)'
+          : '(receiver as $prefix${program.className}).${method.name}($args)';
+      return "'${method.functionId}': (receiver, args) => $target";
+    })
+    .join(',\n');
 
 class KernelProgram {
   KernelProgram(this.className, this.classId, this.instanceFields);

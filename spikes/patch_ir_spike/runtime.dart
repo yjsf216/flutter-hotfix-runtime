@@ -20,6 +20,8 @@ class PatchRuntime {
   int baselineHits = 0;
   int interpreterHits = 0;
 
+  bool hasPatch(String functionId) => _patch.containsKey(functionId);
+
   Object? invoke(String functionId, Object? receiver, List<Object?> args) {
     final code = _patch[functionId];
     if (code != null) {
