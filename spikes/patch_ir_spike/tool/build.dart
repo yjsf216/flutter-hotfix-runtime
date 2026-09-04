@@ -215,6 +215,13 @@ void main() {
   final invokePatch = hooks.procedures.singleWhere(
     (procedure) => procedure.name.text == 'hotfixInvoke',
   );
+  final neverInlineTemplate = hooks.procedures.singleWhere(
+    (procedure) => procedure.name.text == 'hotfixNeverInlineTemplate',
+  );
+  final neverInline = neverInlineTemplate.annotations.single;
+  if (neverInline is! ConstantExpression) {
+    throw const FormatException('never-inline pragma was not constant');
+  }
   final klass = business.classes.singleWhere(
     (value) => value.name == baseline.className,
   );
@@ -226,6 +233,9 @@ void main() {
       throw const FormatException('patch-point shape is the next gate');
     }
     final id = stableId('${baseline.classId}::${functionSignature(procedure)}');
+    procedure.addAnnotation(
+      ConstantExpression(neverInline.constant, neverInline.type),
+    );
     final patchCall = StaticInvocation(
       invokePatch,
       Arguments([
