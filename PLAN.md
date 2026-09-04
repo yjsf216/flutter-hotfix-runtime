@@ -27,6 +27,7 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 - Integrate the proven external Kernel transform into the upstream Dart frontend pipeline.
 - Build the pinned host VM with `dart_dynamic_modules=true` and execute generated DBC3. **Passed:** upstream `core_api` AOT dynamic-module test.
 - Map FunctionId patch points to interpreted closures and installed AOT entries. **Host bridge passed:** `AOT -> DBC3 closure -> AOT`, including transactional rejection.
+- Run the complete upstream dynamic-module AOT semantic suite. **Passed:** 38/38, zero failure logs.
 - Disable cross-function inlining only for updateable business packages.
 - Implement AOT↔interpreter bridges, then object/async/exception/GC/isolate gates.
 
