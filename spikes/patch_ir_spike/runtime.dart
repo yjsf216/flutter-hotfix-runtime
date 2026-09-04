@@ -4,6 +4,7 @@ typedef BaselineFunction =
 class PatchRuntime {
   PatchRuntime({
     required this.baselineId,
+    required this.releaseIdentity,
     required this.metadata,
     required this.baselineFunctions,
   }) : _activeMetadata = {
@@ -11,6 +12,7 @@ class PatchRuntime {
        };
 
   final String baselineId;
+  final Map<String, Object?> releaseIdentity;
   final Map<String, Map<String, Object?>> metadata;
   final Map<String, BaselineFunction> baselineFunctions;
   Map<String, List<List<Object?>>> _patch = const {};
@@ -34,6 +36,14 @@ class PatchRuntime {
     try {
       if (candidate['baselineId'] != baselineId ||
           candidate['signature'] != 'valid-signature') {
+        return false;
+      }
+      final identity = candidate['identity'];
+      if (identity is! Map<String, Object?> ||
+          identity.length != releaseIdentity.length ||
+          releaseIdentity.entries.any(
+            (entry) => identity[entry.key] != entry.value,
+          )) {
         return false;
       }
       final next = <String, List<List<Object?>>>{};

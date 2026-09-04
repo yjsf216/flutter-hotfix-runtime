@@ -87,8 +87,22 @@ void main() {
       ),
     ].join('|'),
   );
+  final identity = <String, Object?>{
+    'appId': 'dev.hotfixruntime.fixture',
+    'platform': 'android',
+    'abi': 'arm64-v8a',
+    'release': '1.0.0+1',
+    'flutterRevision': '00b0c91f06209d9e4a41f71b7a512d6eb3b9c694',
+    'dartVersion': '3.11.5',
+    'engineRevision': '42d3d75a56',
+    'flavor': 'production',
+    'channel': 'stable',
+    'buildParametersSha256':
+        'd4ca340739925e8f4a854a9c4ed6069cc9f687c900a6c3eb509fa070cad0fbb4',
+  };
   final patch = <String, Object?>{
     'baselineId': baselineId,
+    'identity': identity,
     // ponytail: transport signature stub; platform crypto replaces this boundary next.
     'signature': 'valid-signature',
     'classes': [
@@ -96,9 +110,9 @@ void main() {
     ],
   };
 
-  File(
-    '${output.path}/generated_runner.dart',
-  ).writeAsStringSync(generateRunner(baseline, baselineId, metadata, patch));
+  File('${output.path}/generated_runner.dart').writeAsStringSync(
+    generateRunner(baseline, baselineId, identity, metadata, patch),
+  );
 }
 
 KernelProgram loadProgram(String dillPath, String sourceName) {
@@ -244,6 +258,7 @@ void compileExpression(
 String generateRunner(
   KernelProgram program,
   String baselineId,
+  Map<String, Object?> identity,
   Map<String, Object?> metadata,
   Map<String, Object?> patch,
 ) {
@@ -262,6 +277,7 @@ String generateRunner(
       .join(',\n');
   final describe = program.byName('describe').functionId;
   final decorate = program.byName('decorate').functionId;
+  final identityJson = jsonEncode(identity);
   final metadataJson = jsonEncode(metadata);
   final patchJson = jsonEncode(patch);
   return """
@@ -278,6 +294,7 @@ void check(bool value) {
 
 PatchRuntime runtime(Map<String, Map<String, Object?>> metadata) => PatchRuntime(
   baselineId: '$baselineId',
+  releaseIdentity: jsonDecode(r'''$identityJson''') as Map<String, Object?>,
   metadata: metadata,
   baselineFunctions: {$bindings},
 );
@@ -308,6 +325,14 @@ void main() {
   check(!bad2.install(wrongSignature));
   check(bad2.invoke('$describe', receiver, [15]) == 'base:high');
 
+  for (final key in (patch['identity'] as Map).keys) {
+    final mismatch = clone(patch);
+    (mismatch['identity'] as Map)[key] = 'mismatch';
+    final rejected = runtime(metadata);
+    check(!rejected.install(mismatch));
+    check(rejected.invoke('$describe', receiver, [15]) == 'base:high');
+  }
+
   final wrongMethod = clone(patch);
   final wrongMethods = ((wrongMethod['classes'] as List).first as Map)['methods'] as List;
   final existingMethod = wrongMethods.cast<Map>().singleWhere(
@@ -328,6 +353,7 @@ void main() {
   print('PASS: Dart CFE Kernel -> stable IDs -> one changed + one new method IR');
   print('PASS: baseline AOT bindings + changed interpreter dispatch');
   print('PASS: wrong baseline/signature/method signature/corrupt IR -> baseline');
+  print('PASS: every release identity mismatch -> baseline');
 }
 """;
 }
