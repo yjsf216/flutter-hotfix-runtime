@@ -108,8 +108,20 @@ Future<void> main() async {
   installPatches(await loadModuleFromBytes(selectedBytes));
   if (!store.markHealthy(selected)) throw StateError('health commit failed');
 
-  if (pricing.quote(3) != 37) throw StateError('patched dispatch failed');
+  for (var i = 0; i < 20000; i++) {
+    if (pricing.quote(3) != 37) throw StateError('patched dispatch failed');
+  }
+  var caught = false;
+  try {
+    pricing.fail();
+  } on StateError catch (error) {
+    caught = error.message == 'interpreted failure';
+  }
+  if (!caught) throw StateError('interpreted exception did not cross AOT');
+  if (await pricing.asyncQuote(3) != 37) {
+    throw StateError('interpreted async did not cross AOT');
+  }
   print(
-    'PASS: verified store -> FunctionId AOT -> interpreted closure -> baseline AOT',
+    'PASS: verified store + GC/exception/async AOT <-> interpreted closures',
   );
 }

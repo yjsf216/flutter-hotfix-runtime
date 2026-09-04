@@ -55,8 +55,10 @@ the interpreted bridge executes.
 The complete upstream AOT dynamic-module suite also passes: 38/38 tests with
 zero failure logs. It covers constants, closures, checked invocation, records,
 mixins, enums, repeated loading, generics, extension types, inheritance and
-module type checks. Dedicated GC, exception, isolate and long-running async
-stress remain separate product gates.
+module type checks. The hotfix bridge additionally survives 20,000 interpreted
+allocating calls with 21 observed scavenges, propagates an interpreted exception
+to AOT and completes interpreted async code that calls AOT. Isolate and
+long-running async stress remain separate product gates.
 
 Reproduction uses a Dart SDK source checkout at the pinned revision:
 
@@ -115,7 +117,7 @@ Required work:
 2. Replace the temporary JSON opcode interpreter with DBC3 modules.
 3. Generate the proven `FunctionId -> interpreted closure` table from real Kernel diffs; unpatched IDs keep the installed AOT entry.
 4. Preserve the existing signed manifest, strong release binding, atomic store and boot rollback outside the experimental loader.
-5. Add dedicated GC, exception, isolate and long-running async stress before Flutter tests; the 38-test upstream dynamic-module AOT suite passes.
+5. Add isolate and long-running async stress before Flutter tests; the 38-test upstream suite plus host GC/exception/basic-async bridge gates pass.
 6. Vendor only exact pinned BSD-licensed upstream source changes and assume breaking changes on every Dart upgrade.
 
 ## Stop conditions

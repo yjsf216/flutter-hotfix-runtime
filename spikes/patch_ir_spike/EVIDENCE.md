@@ -14,7 +14,8 @@ PASS: SHA-256 + atomic files + pending boot + LKG + blacklist + withdrawal
 PASS: invalid path/digest/state and disk tamper -> safe fallback
 GAP: prebuilt AOT runtime has dart_dynamic_modules=false
 PASS: custom dart_dynamic_modules=true AOT runtime loads and executes DBC3
-PASS: verified store -> FunctionId AOT -> interpreted closure -> baseline AOT
+PASS: verified store + GC/exception/async AOT <-> interpreted closures
+PASS: observed scavenges while interpreted frames were live
 PASS: upstream dynamic-module AOT suite 38/38
 PASS: Android arm64 product VM cross-compiles with DART_DYNAMIC_MODULES
 PARTIAL: iOS arm64 VM core compiles; standalone CLI target link conflicts
@@ -40,6 +41,7 @@ Verified properties:
 - the DBC3 module returns a `FunctionId -> closure` table; the AOT patch point invokes the interpreted closure, which calls a retained baseline AOT method. Unknown IDs are rejected before any candidate entry is activated.
 - the real DBC3 loader is reached only after exact release identity, baselineId, byte length and SHA-256 checks; mismatched metadata and tampered bytes leave the AOT baseline active.
 - valid DBC3 bytes are atomically staged, selected as pending boot, rehashed from final storage, activated, executed and only then marked healthy; tampering of the stored artifact selects bundled baseline.
+- 20,000 interpreted calls allocate temporary objects while `--verbose-gc` confirms scavenges; the same module propagates an interpreted exception into AOT and completes interpreted async code that awaits and calls AOT.
 - all 38 upstream AOT dynamic-module semantic tests pass with zero failure logs; dedicated GC, exception, isolate and long-running async stress are not claimed by that suite.
 - Android produces an AArch64 ELF PIE containing the dynamic loader, DBC3 bytecode reader and interpreter; no device was accessed and Flutter Engine integration remains unproven.
 - iOS compiles the dynamic-enabled VM, bytecode reader and interpreter objects, then the standalone CLI target hits an exported/unexported-symbol-list linker conflict; only the real Flutter Engine link can close this gate.

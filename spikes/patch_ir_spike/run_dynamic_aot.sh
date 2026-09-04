@@ -80,4 +80,9 @@ sed 's/dbc3-host-baseline-v1/wrong-baseline/' \
 cp "$tmp_dir/modules/patch.dart.bytecode" "$tmp_dir/modules/tampered.bytecode"
 printf 'x' >> "$tmp_dir/modules/tampered.bytecode"
 
-(cd "$tmp_dir" && "$out_dir/dartaotruntime_product" main.snapshot)
+runtime_output=$(cd "$tmp_dir" && \
+  "$out_dir/dartaotruntime_product" --verbose-gc main.snapshot 2>&1)
+printf '%s\n' "$runtime_output" | grep '^PASS:'
+gc_count=$(printf '%s\n' "$runtime_output" | grep -c 'Scavenge')
+test "$gc_count" -gt 0
+echo "PASS: observed $gc_count scavenges while interpreted frames were live"

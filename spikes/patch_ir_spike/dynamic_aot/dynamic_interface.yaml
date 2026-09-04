@@ -3,3 +3,6 @@ callable:
   - library: 'runtime_api.dart'
     class: 'Pricing'
     member: 'tax'
+  - library: 'runtime_api.dart'
+    class: 'Pricing'
+    member: 'asyncTax'
