@@ -16,6 +16,8 @@ GAP: prebuilt AOT runtime has dart_dynamic_modules=false
 PASS: custom dart_dynamic_modules=true AOT runtime loads and executes DBC3
 PASS: FunctionId AOT -> interpreted closure -> baseline AOT
 PASS: upstream dynamic-module AOT suite 38/38
+PASS: Android arm64 product VM cross-compiles with DART_DYNAMIC_MODULES
+PARTIAL: iOS arm64 VM core compiles; standalone CLI target link conflicts
 ```
 
 Verified properties:
@@ -37,6 +39,8 @@ Verified properties:
 - a custom macOS arm64 build of the exact pinned Dart revision with `DART_DYNAMIC_MODULES` enabled passes upstream `core_api`: the application is AOT-compiled, the module is validated and compiled to DBC3, and `dartaotruntime_product` loads and executes it through the KBC interpreter.
 - the DBC3 module returns a `FunctionId -> closure` table; the AOT patch point invokes the interpreted closure, which calls a retained baseline AOT method. Unknown IDs are rejected before any candidate entry is activated.
 - all 38 upstream AOT dynamic-module semantic tests pass with zero failure logs; dedicated GC, exception, isolate and long-running async stress are not claimed by that suite.
+- Android produces an AArch64 ELF PIE containing the dynamic loader, DBC3 bytecode reader and interpreter; no device was accessed and Flutter Engine integration remains unproven.
+- iOS compiles the dynamic-enabled VM, bytecode reader and interpreter objects, then the standalone CLI target hits an exported/unexported-symbol-list linker conflict; only the real Flutter Engine link can close this gate.
 - the host store rehashes the final file before selection/health, detects disk tampering, rolls back after two incomplete boots, persists last-known-good and handles signed withdrawal input.
 
 Deliberate spike limits: AOT entry bindings are generated Dart closures, new functions are static and patch-private, the signature token tests the verifier boundary rather than cryptography, and Kernel-to-IR opcodes cover only arguments, constants, integer/string addition, comparison, branch, call and return. The existing P-256 signing smoke separately verifies the cryptographic contract.

@@ -83,8 +83,8 @@ BUNDLED -> VERIFIED -> STAGED -> PENDING_BOOT -> HEALTHY -> LAST_KNOWN_GOOD
 
 | 平台 | 统一部分 | 平台差异 | 商店边界 |
 |---|---|---|---|
-| Android | Patch IR/compiler/linker/runtime | Android embedder、文件与启动状态存储 | Google Play 禁止外部 `.so/.dex/.jar`，解释器路线仍需政策审核 |
-| iOS | 同一 Patch IR/compiler/linker/runtime | iOS embedder、代码签名和异常栈适配 | 不下载 ARM64、`.dylib` 或 `App.framework` |
+| Android | Patch IR/compiler/linker/runtime；独立 arm64 product VM 已交叉编译 | Flutter Android Engine、文件与启动状态存储 | Google Play 禁止外部 `.so/.dex/.jar`，解释器路线仍需政策审核 |
+| iOS | 同一 Patch IR/compiler/linker/runtime；arm64 VM core 已编译 | Flutter iOS Engine 真实链接、代码签名和异常栈适配 | 不下载 ARM64、`.dylib` 或 `App.framework` |
 | OHOS | 同一 Patch IR/compiler/linker/runtime | ArkTS/N-API embedder、sandbox 与 linker namespace | 华为/OpenHarmony 市场规则单独审核 |
 
 Android 是低成本研发平台：先验证 IR、dispatch、AOT bridge、GC 和异常语义，再移植同一核心到 iOS；OHOS 最后只做平台接入和完整回归，不另造执行模型。

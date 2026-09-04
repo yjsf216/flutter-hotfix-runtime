@@ -9,9 +9,9 @@ Independent, self-hosted research and implementation of a signed Flutter Patch I
 | Manifest/security contract | host signing/store checks | platform verifier and key rotation |
 | Android 3.41.9 baseline | host build verified | device validation is manual and not run by this task |
 | Android external `libapp.so` | research/benchmark only | not a store production backend |
-| Unified Patch IR Runtime | Kernel IR + AOT patch-point host spikes passed | native AOT entry bridge and VM frames |
+| Unified Patch IR Runtime | host DBC3 execution/bridge and 38/38 upstream AOT suite passed | Flutter Engine integration and stress gates |
 | OHOS 3.27.5-ohos-1.0.5 | embedder path located | shared Runtime port after Android/iOS gates |
-| iOS | research only | interpreter/linker feasibility gate passes |
+| iOS | dynamic-enabled VM core cross-compiles | Flutter Engine link and runtime execution |
 
 ## Reproduce the baseline
 

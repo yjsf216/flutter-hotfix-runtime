@@ -79,13 +79,28 @@ With macOS 26 SDK, the pinned source additionally needs
 old build's `-Werror` policy. This is a host-toolchain compatibility workaround,
 not a Runtime behavior change.
 
+## Platform cross-compile evidence
+
+Android arm64 product `dartaotruntime` builds successfully from the pinned
+source with `DART_DYNAMIC_MODULES`. The result is an AArch64 ELF PIE targeting
+`/system/bin/linker64`; static inspection contains `Internal_loadDynamicModule`,
+`bytecode_reader.cc`, `interpreter.cc` and DBC3 format diagnostics. It has not
+been installed or run on a device and is not yet a Flutter Engine build.
+
+iOS arm64 compiles the same dynamic-enabled VM, bytecode reader and interpreter
+objects successfully. The standalone command-line `dartaotruntime` target then
+fails to link because its generic rule passes both exported- and unexported-
+symbol lists to current `ld64.lld`. Flutter embeds the VM through different
+Engine targets, so the honest iOS status is “core compiles; real Engine link
+still required,” not platform support.
+
 ## Product adaptation still required
 
 Upstream dynamic modules add new module declarations; they do not automatically replace an existing baseline method. This project retains its compiler-generated FunctionId patch points and maps them to loaded DBC3 functions. The dynamic-interface YAML becomes an allowlist for which baseline libraries, classes and members Patch IR may call or extend.
 
 Required work:
 
-1. Build the Flutter-pinned Engine with `dart_dynamic_modules=true` for Android, iOS and OHOS; the standalone host VM gate has passed.
+1. Build the Flutter-pinned Engine with `dart_dynamic_modules=true` for Android, iOS and OHOS; host execution and Android cross-compilation pass, while iOS has only passed core compilation.
 2. Replace the temporary JSON opcode interpreter with DBC3 modules.
 3. Generate the proven `FunctionId -> interpreted closure` table from real Kernel diffs; unpatched IDs keep the installed AOT entry.
 4. Preserve the existing signed manifest, strong release binding, atomic store and boot rollback outside the experimental loader.
