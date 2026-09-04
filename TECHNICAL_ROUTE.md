@@ -1,138 +1,108 @@
-# Android、iOS、OHOS Flutter 热更新技术路线
+# Android、iOS、OHOS 统一 Patch IR 路线
 
-获取日期：2026-09-04。目标平台仅包括 Android、iOS 和 OpenHarmony/HarmonyOS；研发优先级为 Android → OHOS → iOS。
+获取日期：2026-09-04。产品后端统一为“安装包内 baseline AOT + 内置 Patch IR 解释器 + AOT linker”，顺序为 Android 开发验证 → iOS 移植 → OHOS 移植。
 
-## 1. 核心结论
+## 执行模型
 
-不能设计“一份补丁跑遍所有平台”。可统一的是发布、安全、状态机和审计协议；执行产物必须按平台生成：
-
-```text
-同一份 Dart 变更
-    |
-    +-- Android -------- 完整、已签名的 libapp.so
-    +-- OHOS ----------- 完整、已签名的 libapp.so
-    +-- iOS ------------ 非机器码 Patch IR + 内置解释器/AOT linker
-```
-
-第一版不做二进制差分。完整产物更容易验证和回滚；只有补丁体积经过真实统计成为问题后，才在传输层增加 bsdiff/zstd，安装后仍校验完整产物 SHA-256。
-
-## 2. 共用平面
-
-### 2.1 构建平面
-
-每个正式 release 保存不可变的 `release descriptor`：源码提交、依赖锁、Flutter/Dart/Engine revision、平台 SDK/NDK、ABI、flavor、channel、全部 build defines、混淆参数和构建脚本摘要。补丁必须从该 descriptor 重放构建。
-
-补丁 manifest 强绑定：
-
-- `appId`、platform、ABI、release/versionCode；
-- Flutter、Dart、Engine 的完整 revision；
-- flavor、channel、构建参数 SHA-256；
-- patch ID、父 patch/release、产物长度和 SHA-256；
-- 签名算法、key ID、签发/失效时间、灰度规则和撤回状态。
-
-### 2.2 发布平面
-
-首版只需要对象存储/CDN：
+业务继续书写普通 Dart，不使用注解、wrapper、代理类或手工注册。定制 Dart frontend/compiler 自动完成：
 
 ```text
-/apps/<appId>/<release>/<platform>/<abi>/patches/<patchId>/artifact
-/apps/<appId>/<release>/channels/<channel>/manifest.json
+普通 Dart 源码
+  -> 稳定 ClassId / FunctionId
+  -> patch points + dispatch table
+  -> baseline AOT + linker metadata
+
+新源码 + baseline metadata
+  -> 类级组织、函数级 diff
+  -> 已签名非机器码 Patch IR
+
+运行时调用
+  -> 未变化函数：安装包内 baseline AOT
+  -> 变化/新增函数：Patch IR interpreter
 ```
 
-离线 P-256 私钥签名规范化 manifest，App 内置公钥。设备用稳定匿名桶执行百分比灰度；发布新 manifest 即可扩量、撤回或切回旧 patch。需要人员审批和多租户隔离时再增加服务端，不提前造控制台。
+AOT linker 只把函数 ID 映射到安装包内已有 AOT entry，不加载补丁机器码。外部 `libapp.so` 仅保留为 Android/OHOS 加载链路研究和性能基准，不是商店生产后端。
 
-### 2.3 客户端状态机
+## 第一版语言边界
+
+允许：
+
+- 修改已有方法体、构造逻辑、Widget `build` 和 async 业务逻辑；
+- 新增仅由补丁代码调用的函数和类；
+- 调用 baseline 中已经存在且签名未变的 Dart/native 能力。
+
+拒绝：
+
+- 修改实例字段布局、继承关系、mixin、泛型结构、已有方法签名或 enum 布局；
+- 新增或修改 native plugin、FFI symbol/signature；
+- 跨 Flutter、Dart、Engine revision 或构建参数使用补丁。
+
+可更新业务 package 禁止跨函数内联，调用经 dispatch table；Flutter Framework、Dart SDK 和固定依赖保持普通 AOT 优化。新增类第一版只能在 Patch IR 内创建、持有和调用，不暴露给 baseline AOT，也不参与 native/FFI ABI。
+
+## 共用安全与发布平面
+
+签名 manifest 强绑定 appId、platform、ABI、release、Flutter/Dart/Engine revision、flavor、channel、构建参数摘要、baselineId、patchId、父版本、IR 长度和 SHA-256。离线私钥签名；网络、CDN 和磁盘均不可信。
+
+首版控制面只有不可变对象和静态签名 channel manifest。客户端异步下载并验证，使用同目录临时文件、fsync 和原子 rename。启动状态为：
 
 ```text
-BUNDLED -> DOWNLOADED -> VERIFIED -> STAGED -> PENDING_BOOT
-    ^                                              |
-    |                                    success  v
-    +---- last-known-good <- ACTIVE <- HEALTHY ---+
-                ^                    |
-                +---- BLACKLIST <----+ crash/incomplete boot
+BUNDLED -> VERIFIED -> STAGED -> PENDING_BOOT -> HEALTHY -> LAST_KNOWN_GOOD
+                              |                    |
+                              +-- incomplete/crash+-> BLACKLIST -> fallback
 ```
 
-下载在已验证版本运行期间异步进行。启动只读本地状态，不依赖网络；网络、磁盘、解析、验签或加载失败都运行 last-known-good，否则运行包内 baseline。安装使用同目录临时文件、fsync 和原子 rename；Engine 启动前再次核对最终 inode、长度和 SHA-256。
+任意网络、解析、验签、版本、IR 校验、磁盘或启动失败都继续运行 last-known-good，否则运行包内 baseline。
 
-## 3. 各平台执行后端
+## 编译器与 Runtime 分层
 
-| 平台 | 第一技术路线 | Engine 改造 | 主要风险 |
-|---|---|---:|---|
-| Android | app 私有目录完整 `libapp.so` | spike 可不改；生产建议小改 | OEM/SELinux、snapshot 混装、Play 政策 |
-| OHOS | app sandbox 完整 `libapp.so` | 需要 | linker namespace、签名/市场策略、loader 缺少路径校验 |
-| iOS | Patch IR 解释执行，未变函数复用包内 AOT | Dart SDK/VM 深度改造 | GC/异常/isolate/FFI、性能、审核 |
+### Frontend/compiler
 
-### 3.1 Android
+- 以 library URI、声明路径、类名、成员名、kind 和规范化签名生成稳定 ID；方法体变化不改变 FunctionId。
+- 保存 baseline 的类布局、签名、常量、函数和优化约束元数据。
+- 对新程序做结构兼容检查，先拒绝再生成 IR。
+- 以类组织 manifest，实际只携带变化/新增函数。
+- 对可更新业务代码插入 dispatch；禁止会绕过 patch point 的跨函数内联。
 
-Flutter 3.41.9 的 `FlutterLoader` 已接受应用内部 files 目录中的 `--aot-shared-library-name=<absolute.so>`，`SettingsFromCommandLine` 收集候选库，`DartSnapshot::SearchMapping` 按顺序解析四个 snapshot symbol。因此第一步先用 stock Engine 证明外部完整 `libapp.so` 可启动，不使用反射。
+### Patch IR
 
-生产版仍建议做一个最小 Engine/embedder 改造：一次打开并固定一个已验证文件句柄，从同一个 library 获取四个 snapshot symbol，再整体提交给 VM。原因是 stock resolver 分别查找四个 symbol，损坏库理论上可能让不同 symbol 落到不同候选库；安全边界不能依赖“通常会完整”。
+先从整数、字符串、参数、分支、调用、返回开始，再依次扩展对象字段读取、虚调用、闭包/泛型、async/异常、GC、isolate 和 Flutter Widget。IR 有版本、长度、opcode allowlist、栈深和跳转目标校验；验证完成前不得进入解释器。
 
-Android 验收必须覆盖 baseline、有效 patch、逐字段版本不匹配、截断/篡改、未知 key、磁盘满、进程在 rename 中被杀、启动前崩溃、健康检查后崩溃、黑名单和服务端撤回。Google Play 分发前单独进行政策审核；技术可加载不等于商店允许任意功能变化。
+### AOT linker/bridge
 
-### 3.2 OpenHarmony/HarmonyOS
+- `IR -> IR`：dispatch 到补丁函数；
+- `IR -> AOT`：按 FunctionId 调用 baseline entry；
+- `AOT -> IR`：baseline patch point 查 dispatch table；
+- `AOT -> AOT`：无 patch 时走快速路径。
 
-现有 OpenHarmony-SIG 链路为 ArkTS `FlutterLoader` → `FlutterNapi.init` → C++ `OhosMain::Init` → `SettingsFromCommandLine` → snapshot resolver。release 构建把 `libapp.so` 放入 HAP 的 ABI library 目录。
+解释帧必须纳入 Dart GC root、write barrier、safepoint、异常展开和 stack trace。这里是 iOS 可行性的核心停止门，不用业务层对象代理规避 VM 语义。
 
-OHOS 不直接照搬 Android loader。先实现两个 spike：
+## 平台策略
 
-1. 确认目标系统的 app linker namespace 是否允许从应用可写 sandbox `dlopen`；
-2. 确认应用市场签名/审核是否允许这种产物。
+| 平台 | 统一部分 | 平台差异 | 商店边界 |
+|---|---|---|---|
+| Android | Patch IR/compiler/linker/runtime | Android embedder、文件与启动状态存储 | Google Play 禁止外部 `.so/.dex/.jar`，解释器路线仍需政策审核 |
+| iOS | 同一 Patch IR/compiler/linker/runtime | iOS embedder、代码签名和异常栈适配 | 不下载 ARM64、`.dylib` 或 `App.framework` |
+| OHOS | 同一 Patch IR/compiler/linker/runtime | ArkTS/N-API embedder、sandbox 与 linker namespace | 华为/OpenHarmony 市场规则单独审核 |
 
-通过后，在 ArkTS 和 C++ 两侧增加单一 `verified_aot_path`，C++ 做 canonical path、普通文件、owner/mode、无 symlink、完整 symbol 集和 revision 校验，再把同一 library handle 的四个 mapping 交给 VM。失败直接使用 HAP 内的 baseline。
+Android 是低成本研发平台：先验证 IR、dispatch、AOT bridge、GC 和异常语义，再移植同一核心到 iOS；OHOS 最后只做平台接入和完整回归，不另造执行模型。
 
-### 3.3 iOS
+## 里程碑与停止门
 
-iOS 不下载 `.dylib`、`App.framework` 或新的 ARM64 指令。Store release 中同时包含：
+1. **语义 spike**：普通 Dart fixture 自动生成稳定 ID；单方法 diff；最小 IR；baseline/AOT 与 patch/interpreter dispatch；坏签名、baselineId、签名结构和 IR 均 fail-open。
+2. **Dart frontend 接入**：从 analyzer 风格 spike 切到上游 Kernel/frontend，业务源码零侵入；如果必须手工注册则停止。
+3. **AOT patch points**：业务 package 禁止跨函数内联并生成 dispatch table；性能损失超过预算则重新划定可更新 package，而不是全局关闭优化。
+4. **对象与控制流**：字段读取、虚调用、闭包/泛型、async/异常逐级通过语义 corpus。
+5. **VM 正确性**：GC root、barrier、safepoint、isolate；任何偶发内存错误都停止产品化。
+6. **Flutter 集成**：Widget、element/state、frame、plugin baseline API 回归。
+7. **Android 生产门**：灰度、撤回、崩溃回滚、审计、Play 政策评估。
+8. **iOS 与 OHOS**：复用同一 corpus，分别通过平台和市场门后才声明支持。
 
-- 原始 Dart 程序的签名 AOT baseline；
-- Patch IR 解释器；
-- baseline 函数/类型/常量元数据；
-- AOT 与解释代码之间的调用桥和 patch dispatch table。
+## 一手资料
 
-补丁编译器同时读取 baseline descriptor 与新程序，生成稳定函数 ID、兼容性检查结果和只含变化部分的非机器码 Patch IR。运行时优先调用 baseline AOT 中可证明等价的函数；变化函数进入解释器。
-
-iOS 按以下顺序推进，任何一级失败都停止产品化：
-
-1. 纯函数：整数、字符串、分支、循环、静态调用；
-2. 对象字段、虚调用、闭包、泛型和常量池；
-3. async/await、异常和 stack trace；
-4. GC root、write barrier、safepoint 与 deoptimization 边界；
-5. isolate、消息传递和 background isolate；
-6. FFI：第一版只允许调用 baseline 已声明的 FFI，禁止新增 native symbol/signature；
-7. Flutter framework/widget 回归、性能与内存基准；
-8. App Review/法律书面评估。
-
-最大技术难点不是“写一个 Dart 语法解释器”，而是让解释帧与 AOT 帧共享同一对象模型、GC 和异常语义，并在编译器优化后仍能稳定识别、链接 baseline 函数。实现必须基于上游 `dart-lang/sdk`；Shorebird 的公开架构只作为验证路线可行性的先例，不依赖其不可获得源码。
-
-## 4. 交付顺序与停止点
-
-1. **共同协议**：manifest、签名、verifier、原子安装、状态机的主机测试。
-2. **Android spike**：stock Engine 外部 AOT；通过后补 coherent snapshot mapping，再做重复真机矩阵。
-3. **OHOS spike**：先验证 sandbox `dlopen` 与市场边界；任一失败则停止 AOT 路线，转资源/DSL 动态化。
-4. **iOS feasibility**：只做 Dart SDK 最小语义 corpus；GC/异常/isolate 任一无法证明正确即停止。
-5. **Android/OHOS 生产硬化**：灰度、撤回、观测、演练和合规签字。
-6. **iOS 扩面**：只有 feasibility 和审核门都通过才接 Flutter widget 与生产业务。
-
-## 5. 明确不做
-
-- 不用反射替换 Flutter 私有字段。
-- 不把 Kernel/JIT debug 产物用于生产。
-- 不在 iOS 下载未签名机器码。
-- 不允许跨 Engine/Dart revision 使用 patch。
-- 不用 MD5/CRC 作为安全完整性校验。
-- 不在关键加载链路 fail-closed 导致 App 无法启动。
-- 不宣称三个平台可用，直到各自的重复设备/系统矩阵和商店风险门通过。
-
-## 6. 一手资料
-
-- [Flutter 3.41.9 Android FlutterLoader](https://github.com/flutter/flutter/blob/3.41.9/engine/src/flutter/shell/platform/android/io/flutter/embedding/engine/loader/FlutterLoader.java)
-- [Flutter snapshot resolver](https://github.com/flutter/flutter/blob/3.41.9/engine/src/flutter/runtime/dart_snapshot.cc)
 - [Flutter AOT operation](https://github.com/flutter/flutter/blob/3.41.9/docs/engine/Flutter-engine-operation-in-AOT-Mode.md)
-- [Flutter architecture and embedders](https://docs.flutter.dev/resources/architectural-overview)
-- [OpenHarmony-SIG FlutterLoader](https://gitee.com/openharmony-sig/flutter_engine/blob/master/shell/platform/ohos/flutter_embedding/flutter/src/main/ets/embedding/engine/loader/FlutterLoader.ets)
-- [OpenHarmony-SIG OhosMain](https://gitee.com/openharmony-sig/flutter_engine/blob/master/shell/platform/ohos/ohos_main.cpp)
-- [HarmonyOS C/C++ dynamic linker namespace](https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/c-cpp-overview)
+- [Flutter snapshot resolver](https://github.com/flutter/flutter/blob/3.41.9/engine/src/flutter/runtime/dart_snapshot.cc)
+- [Shorebird system architecture](https://docs.shorebird.dev/code-push/system-architecture/)
+- [Shorebird public code-push design notes](https://github.com/shorebirdtech/shorebird/blob/main/NOTES_ON_CODEPUSH.md)
+- [Google Play Device and Network Abuse policy](https://support.google.com/googleplay/android-developer/answer/16559646)
 - [Apple App Review Guidelines 2.5.2](https://developer.apple.com/cn/app-store/review/guidelines/)
-- [Shorebird public system architecture](https://docs.shorebird.dev/code-push/system-architecture/)
-- [Google Play policy responsibilities](https://support.google.com/googleplay/android-developer/answer/9899234)
+- [OpenHarmony-SIG FlutterLoader](https://gitee.com/openharmony-sig/flutter_engine/blob/master/shell/platform/ohos/flutter_embedding/flutter/src/main/ets/embedding/engine/loader/FlutterLoader.ets)

@@ -12,44 +12,42 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 **Accept:** clean checkout runs test/analyze/build and records exact revisions and `libapp.so`; an authorized operator later records an arm64 device displaying `BASELINE`.  
 **Stop:** target SDK cannot reproducibly build or packaged AOT identity cannot be derived.
 
-## M1 — Android external AOT selection
+## M1 — host Patch IR semantic spike
 
-- Build `BASELINE` and `PATCHED` release AOT with identical pinned inputs.
-- Add the minimum pre-engine verifier/atomic installer/selector.
-- Pass external-library path directly to `FlutterEngine`; no reflection.
-- Add scripted baseline, valid patch, corrupt patch, crash rollback, and mismatch scenarios.
+- Parse ordinary baseline/updated Dart fixtures without annotations or wrappers.
+- Generate stable ClassId/FunctionId, baseline metadata, a method-level diff, and minimal class-grouped Patch IR.
+- Dispatch unchanged functions to baseline implementations and changed functions to the interpreter.
+- Reject bad signature, baselineId, method signature, and malformed IR while continuing baseline.
 
-**Accept:** two physical devices pass every scenario across three clean runs; no unverified byte reaches `dlopen`; offline/network failure launches within the agreed startup budget.  
-**Stop:** loader policy forbids app-private executable mappings on supported Android versions, revisions cannot be bound reliably, or rollback cannot recover a boot loop.
+**Accept:** one host command compiles/runs the spike and proves every case; business fixtures contain no hot-update marker.
+**Stop:** stable identity or method-level replacement requires business-source instrumentation.
 
-## M2 — Android production hardening
+## M2 — Dart frontend and AOT patch points
 
-- Key rotation/revocation, deterministic rollout bucket, signed channel withdrawal.
-- Telemetry schema for selection, verification, boot success, crash, rollback; privacy review.
-- Reproducible engine/embedder build only if M1 proves upstream embedding insufficient.
-- Store-policy/legal review and operational runbook.
+- Move the spike parser into the upstream Dart Kernel/frontend pipeline.
+- Emit class/function metadata and dispatch points automatically.
+- Disable cross-function inlining only for updateable business packages.
+- Implement AOT↔interpreter bridges, then object/async/exception/GC/isolate gates.
 
-**Accept:** adversarial tests, rollback drill, audit trail, staged rollout gate, and support matrix sign-off.  
-**Stop:** policy review rejects executable patching or operational evidence is insufficient.
+**Accept:** ordinary Dart compiles without business instrumentation; generated AOT patch points route both directions; the semantic corpus and performance budget pass.
+**Stop:** stable linkage requires manual business registration, or patch points impose unacceptable baseline overhead.
 
-## M3 — OHOS loading spike and hardening
+## M3 — Android production integration
 
-- Trace ArkTS `FlutterLoader` -> N-API -> `OhosMain::Init` -> settings -> snapshot symbols.
-- Add canonical app-private-path enforcement and reuse the manifest/state-machine contract.
-- Produce repeatable HAP build/install/baseline/patch/corrupt/crash/mismatch scripts.
+- Embed the shared Runtime in Flutter 3.41.9 Android.
+- Add signing, atomic install, startup state, last-known-good, blacklist and withdrawal.
+- Run compatibility, performance, crash rollback and Google Play policy gates.
 
-**Accept:** physical HarmonyOS/OpenHarmony targets pass the same safety matrix and marketplace review is cleared.  
-**Stop:** signed HAP sandbox/loader policy rejects executable `libapp.so`, engine revision is ambiguous, or recovery is unreliable.
+**Accept:** host integration tests plus an independently authorized Android device matrix pass baseline, valid patch, corrupt patch, mismatch and crash rollback scenarios.
+**Stop:** Google Play review rejects the interpreter model, engine revision is ambiguous, or recovery is unreliable.
 
-## M4 — iOS feasibility, then implementation only if viable
+## M4 — iOS port, then OHOS port
 
-- Fork upstream Dart SDK at the engine-pinned revision; build a tiny baseline/delta corpus.
-- Define stable function identity and object-layout compatibility.
-- Prototype changed-function interpreter plus AOT linkage for pure Dart first.
-- Expand gates: closures/generics/async, GC/safepoints, exceptions, isolates, then FFI.
-- Obtain written App Review/legal interpretation before production rollout.
+- Port the already-tested shared IR/interpreter/linker core to iOS without downloaded machine code.
+- Pass App Review/legal, GC, exception, isolate, Flutter and performance gates.
+- Port the same core through the OHOS ArkTS/N-API embedder and repeat the corpus.
 
-**Accept feasibility:** no downloaded machine code; deterministic linker; semantic parity corpus passes; overhead and patch size meet explicit budgets; store/legal gate is positive.  
+**Accept feasibility:** no downloaded machine code; deterministic linker; semantic parity corpus passes on each platform; overhead and patch size meet explicit budgets; store/legal gates are positive.
 **Stop:** any correctness gap in GC/exception/isolate safety, required private Shorebird source, unacceptable performance, or policy rejection.
 
 ## Deferred until demanded

@@ -3,9 +3,9 @@
 ## Smallest system that can be safe
 
 ```text
-offline private key -> signed immutable manifest + artifact -> object storage/CDN
+offline private key -> signed manifest + Patch IR -> object storage/CDN
                                                                |
-app startup -> fetch candidate -> verify/bind -> atomic stage -> select -> Flutter Engine
+app startup -> fetch candidate -> verify/bind -> atomic stage -> dispatch -> AOT/interpreter
                   failure ---------> last-known-good ----------^      |
                                      blacklist <--- boot state/crash --+
 ```
@@ -51,17 +51,21 @@ Only a fully verified staged directory may be atomically renamed to `active`. `P
 
 ## Platform loading chains found
 
+### Unified execution backend
+
+All three platforms ship baseline AOT, a Patch IR interpreter, stable class/function metadata, a dispatch table, and AOT↔interpreter bridges. The customized frontend/compiler inserts patch points automatically; business Dart remains ordinary source. Unchanged functions use bundled AOT and changed/new functions use signed non-machine-code IR.
+
 ### Android first
 
-Flutter 3.41.9 `FlutterLoader.ensureInitializationComplete` accepts `--aot-shared-library-name=<path>`, canonicalizes it, and permits only `.so` files beneath the app's internal files directory. It then appends bundled defaults. `SettingsFromCommandLine` preserves all supplied AOT paths and `DartSnapshot::SearchMapping` tries them in order, so the verified external path is preferred without reflection or an Engine fork. The spike must prove this on release devices before adopting it. If upstream behavior changes, the fallback is a small audited embedder API for verified mappings, not reflection.
-
-### OHOS second
-
-The public OpenHarmony-SIG loader constructs `--aot-shared-library-name` from `FlutterApplicationInfo`, passes shell args through N-API to `OhosMain::Init`, then calls `SettingsFromCommandLine`. It currently lacks the Android loader's canonical internal-path check. The first OHOS change should therefore be a narrow loader/embedder input for an already verified private path plus native canonical-path enforcement; device tracing must establish actual search order and HAP sandbox/dynamic-loader policy.
+Android is the development and debugging host for the shared Runtime. External `libapp.so` remains a loading-chain experiment and performance baseline only; Google Play production uses Patch IR because Play prohibits downloading `.so`, `.dex`, and `.jar` outside Play while conditionally allowing VM/interpreter execution.
 
 ### iOS last
 
-Stock Flutter loads signed AOT snapshot symbols from `App.framework`. Downloading new native instructions is out of scope. The independent runtime track must retain store-signed baseline AOT, represent changed functions as non-native interpreted data, and link unchanged functions back to baseline AOT while preserving Dart object layout, safepoints, stack maps, GC barriers, exceptions, isolates, async state machines, generics, FFI boundaries, and debugger/crash semantics. This is a Dart SDK/compiler/VM program, not an embedder flag.
+Stock Flutter loads signed AOT snapshot symbols from `App.framework`. The shared Runtime retains store-signed baseline AOT, interprets changed functions from Patch IR, and links unchanged functions back to baseline AOT while preserving Dart object layout, safepoints, stack maps, GC barriers, exceptions, isolates, async state machines, generics, FFI boundaries, and debugger/crash semantics. No downloaded machine code is allowed.
+
+### OHOS last
+
+OHOS receives the same Patch IR and Runtime semantics through its ArkTS/N-API embedder. The public external `libapp.so` chain is retained only for research; production does not depend on writable executable mappings.
 
 ## Public prior art and license boundary
 
@@ -80,4 +84,3 @@ Shiply material is used only as product inspiration for staged rollout, approval
 - [Shorebird engineering licensing philosophy](https://handbook.shorebird.dev/departments/engineering/)
 - [Apple App Review Guidelines 2.5.2](https://developer.apple.com/app-store/review/guidelines/)
 - [Shiply public site](https://shiply.tds.qq.com/)
-
