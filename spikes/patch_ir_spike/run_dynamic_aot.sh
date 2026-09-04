@@ -80,8 +80,15 @@ sed 's/dbc3-host-baseline-v1/wrong-baseline/' \
 cp "$tmp_dir/modules/patch.dart.bytecode" "$tmp_dir/modules/tampered.bytecode"
 printf 'x' >> "$tmp_dir/modules/tampered.bytecode"
 
+set +e
 runtime_output=$(cd "$tmp_dir" && \
   "$out_dir/dartaotruntime_product" --verbose-gc main.snapshot 2>&1)
+runtime_status=$?
+set -e
+if [ "$runtime_status" -ne 0 ]; then
+  printf '%s\n' "$runtime_output" >&2
+  exit "$runtime_status"
+fi
 printf '%s\n' "$runtime_output" | grep '^PASS:'
 gc_count=$(printf '%s\n' "$runtime_output" | grep -c 'Scavenge')
 test "$gc_count" -gt 0

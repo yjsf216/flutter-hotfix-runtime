@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:crypto/crypto.dart';
 import 'package:dynamic_modules/dynamic_modules.dart';
@@ -121,7 +122,15 @@ Future<void> main() async {
   if (await pricing.asyncQuote(3) != 37) {
     throw StateError('interpreted async did not cross AOT');
   }
+  final loadedPatches = activePatches();
+  final isolatePassed = await Isolate.run(() async {
+    final isolatedPricing = Pricing();
+    if (isolatedPricing.quote(3) != 4) return false;
+    installPatches(loadedPatches);
+    return isolatedPricing.quote(3) == 37;
+  });
+  if (!isolatePassed) throw StateError('isolate-local patch state failed');
   print(
-    'PASS: verified store + GC/exception/async AOT <-> interpreted closures',
+    'PASS: verified store + GC/exception/async/isolate AOT <-> interpreted closures',
   );
 }

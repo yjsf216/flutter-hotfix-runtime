@@ -2,6 +2,8 @@ typedef PatchBody = Object? Function(List<Object?> arguments);
 
 var _patches = <String, PatchBody>{};
 
+Map<String, PatchBody> activePatches() => Map.unmodifiable(_patches);
+
 void installPatches(Object? moduleResult) {
   if (moduleResult is! Map) throw StateError('patch module must return a map');
   final candidate = <String, PatchBody>{};

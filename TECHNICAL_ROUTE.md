@@ -77,6 +77,8 @@ BUNDLED -> VERIFIED -> STAGED -> PENDING_BOOT -> HEALTHY -> LAST_KNOWN_GOOD
 - `AOT -> IR`：baseline patch point 查 dispatch table；
 - `AOT -> AOT`：无 patch 时走快速路径。
 
+Dynamic module 声明在 isolate group 内只加载一次，而 dispatch 表是 isolate-local；主 isolate 验证并加载后，将不可变 closure 表发送给各子 isolate 激活。子 isolate 不重复加载同一 module URI。
+
 解释帧必须纳入 Dart GC root、write barrier、safepoint、异常展开和 stack trace。这里是 iOS 可行性的核心停止门，不用业务层对象代理规避 VM 语义。
 
 ## 平台策略
