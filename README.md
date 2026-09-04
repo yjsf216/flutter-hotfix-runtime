@@ -44,6 +44,16 @@ DART_BIN=/path/to/flutter/bin/dart \
 
 This compiles ordinary Dart sources through the pinned Dart CFE/Kernel into stable metadata and Patch IR, injects method-entry patch points directly into Kernel AST, and compiles the transformed program to a native host executable. It verifies baseline/AOT and patch/interpreter paths plus mismatch rejection. A second native check covers SHA-256, atomic storage, pending boot, last-known-good, blacklist, withdrawal and disk tampering.
 
+After building the pinned Dart source with `dart_dynamic_modules=true`, the
+real DBC3/AOT bridge is checked with:
+
+```sh
+DART_SDK_SOURCE="$PWD/work/upstream/dart-sdk" \
+  sh spikes/patch_ir_spike/run_dynamic_aot.sh
+```
+
+Expected: `PASS: FunctionId AOT -> interpreted closure -> baseline AOT`.
+
 The external `libapp.so` work is retained only as loading-chain research and an AOT performance baseline. It is not the Android store production backend.
 
 See [TECHNICAL_ROUTE.md](TECHNICAL_ROUTE.md), [DYNAMIC_MODULES_AUDIT.md](DYNAMIC_MODULES_AUDIT.md), [ARCHITECTURE.md](ARCHITECTURE.md), [PLAN.md](PLAN.md), [COMPATIBILITY.md](COMPATIBILITY.md), and [SECURITY.md](SECURITY.md).

@@ -14,6 +14,7 @@ PASS: SHA-256 + atomic files + pending boot + LKG + blacklist + withdrawal
 PASS: invalid path/digest/state and disk tamper -> safe fallback
 GAP: prebuilt AOT runtime has dart_dynamic_modules=false
 PASS: custom dart_dynamic_modules=true AOT runtime loads and executes DBC3
+PASS: FunctionId AOT -> interpreted closure -> baseline AOT
 ```
 
 Verified properties:
@@ -33,6 +34,7 @@ Verified properties:
 - transformed Kernel inspection shows one compiler-injected `vm:never-inline` annotation and a `hotfixHasPatch`/`hotfixInvoke` entry guard on every patchable business method.
 - the pinned upstream `dart2bytecode` AOT snapshot emits a 945-byte DBC3 v1 module from the fixture; the stock AOT runtime's explicit unsupported result proves a custom `dart_dynamic_modules=true` build is required.
 - a custom macOS arm64 build of the exact pinned Dart revision with `DART_DYNAMIC_MODULES` enabled passes upstream `core_api`: the application is AOT-compiled, the module is validated and compiled to DBC3, and `dartaotruntime_product` loads and executes it through the KBC interpreter.
+- the DBC3 module returns a `FunctionId -> closure` table; the AOT patch point invokes the interpreted closure, which calls a retained baseline AOT method. Unknown IDs are rejected before any candidate entry is activated.
 - the host store rehashes the final file before selection/health, detects disk tampering, rolls back after two incomplete boots, persists last-known-good and handles signed withdrawal input.
 
 Deliberate spike limits: AOT entry bindings are generated Dart closures, new functions are static and patch-private, the signature token tests the verifier boundary rather than cryptography, and Kernel-to-IR opcodes cover only arguments, constants, integer/string addition, comparison, branch, call and return. The existing P-256 signing smoke separately verifies the cryptographic contract.

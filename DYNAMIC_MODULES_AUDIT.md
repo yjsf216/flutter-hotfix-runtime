@@ -42,6 +42,11 @@ This proves the pinned VM can execute downloaded non-machine-code DBC3 inside
 an AOT process and cross the AOT/interpreter boundary. It does not yet prove
 Flutter Engine integration or Android, iOS, or OHOS support.
 
+The repository's `run_dynamic_aot.sh` adds the hotfix-specific bridge: a DBC3
+entry point returns a validated `FunctionId -> closure` table, an existing AOT
+method calls the interpreted closure, and that closure calls a retained AOT
+method. A malformed table is rejected transactionally before activation.
+
 Reproduction uses a Dart SDK source checkout at the pinned revision:
 
 ```sh
@@ -58,6 +63,9 @@ xcodebuild/ReleaseARM64/dartaotruntime_product --disable-dart-dev \
 xcodebuild/ReleaseARM64/dart \
   pkg/dynamic_modules/test/runner/work_dynamic_runner.dill \
   --runtime=aot --test=core_api --verbose
+cd <flutter-hotfix-runtime>
+DART_SDK_SOURCE=<dart-sdk-source> \
+  sh spikes/patch_ir_spike/run_dynamic_aot.sh
 ```
 
 With macOS 26 SDK, the pinned source additionally needs
@@ -73,7 +81,7 @@ Required work:
 
 1. Build the Flutter-pinned Engine with `dart_dynamic_modules=true` for Android, iOS and OHOS; the standalone host VM gate has passed.
 2. Replace the temporary JSON opcode interpreter with DBC3 modules.
-3. Resolve FunctionId to a loaded interpreted `Function`, while unpatched IDs keep the installed AOT entry.
+3. Generate the proven `FunctionId -> interpreted closure` table from real Kernel diffs; unpatched IDs keep the installed AOT entry.
 4. Preserve the existing signed manifest, strong release binding, atomic store and boot rollback outside the experimental loader.
 5. Run upstream bytecode, GC, exception, async and dynamic-interface tests before Flutter tests.
 6. Vendor only exact pinned BSD-licensed upstream source changes and assume breaking changes on every Dart upgrade.

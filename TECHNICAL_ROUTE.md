@@ -71,6 +71,7 @@ BUNDLED -> VERIFIED -> STAGED -> PENDING_BOOT -> HEALTHY -> LAST_KNOWN_GOOD
 
 ### AOT linker/bridge
 
+- DBC3 模块入口返回 `FunctionId -> interpreted closure` 表；Runtime 全量校验后一次性激活，不直接依赖 VM 私有 Function 查找 API；
 - `IR -> IR`：dispatch 到补丁函数；
 - `IR -> AOT`：按 FunctionId 调用 baseline entry；
 - `AOT -> IR`：baseline patch point 查 dispatch table；
@@ -93,7 +94,7 @@ Android 是低成本研发平台：先验证 IR、dispatch、AOT bridge、GC 和
 1. **语义 spike（已通过）**：Dart CFE 把普通 fixture 编译为 Kernel；自动生成稳定 ID；单方法 diff；最小 IR；baseline/AOT 与 patch/interpreter dispatch；坏签名、baselineId、签名结构和 IR 均 fail-open。
 2. **Dart frontend 接入（进行中）**：把当前 Kernel reader 移入上游 frontend 编译流水线，直接输出 metadata/IR 并生成 patch points；如果必须手工注册则停止。
 3. **AOT patch points**：业务 package 禁止跨函数内联并生成 dispatch table；性能损失超过预算则重新划定可更新 package，而不是全局关闭优化。
-4. **上游 dynamic modules（host VM 已通过）**：锁定 Dart 3.11.5 VM 以 `dart_dynamic_modules=true` 构建成功，上游 `core_api` 已验证 AOT 主程序加载并执行 DBC3；下一门是 Flutter Engine 与三平台构建。
+4. **上游 dynamic modules（host VM 已通过）**：锁定 Dart 3.11.5 VM 以 `dart_dynamic_modules=true` 构建成功；上游 `core_api` 与仓库内 FunctionId 用例已验证 `AOT -> DBC3 closure -> AOT`；下一门是 Flutter Engine 与三平台构建。
 5. **VM 正确性**：复用并扩展上游字段、虚调用、闭包/泛型、async/异常、GC root、barrier、safepoint、isolate 测试；任何偶发内存错误都停止产品化。
 6. **Flutter 集成**：Widget、element/state、frame、plugin baseline API 回归。
 7. **Android 生产门**：灰度、撤回、崩溃回滚、审计、Play 政策评估。
