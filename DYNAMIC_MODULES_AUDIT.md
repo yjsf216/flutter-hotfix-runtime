@@ -81,6 +81,12 @@ not a Runtime behavior change.
 
 ## Platform cross-compile evidence
 
+Flutter 3.41.9 Engine already exposes `tools/gn --dart-dynamic-modules`, maps it
+to `dart_dynamic_modules=true`, and contains dedicated DDM builders for Android
+arm64/x64 release/debug plus iOS device/simulator release/debug. Its archive
+rules add the `-ddm` suffix. Therefore no custom GN plumbing patch is needed for
+Android or iOS; the project should reuse this experimental upstream build path.
+
 Android arm64 product `dartaotruntime` builds successfully from the pinned
 source with `DART_DYNAMIC_MODULES`. The result is an AArch64 ELF PIE targeting
 `/system/bin/linker64`; static inspection contains `Internal_loadDynamicModule`,

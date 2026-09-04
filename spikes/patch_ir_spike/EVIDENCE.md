@@ -41,6 +41,7 @@ Verified properties:
 - all 38 upstream AOT dynamic-module semantic tests pass with zero failure logs; dedicated GC, exception, isolate and long-running async stress are not claimed by that suite.
 - Android produces an AArch64 ELF PIE containing the dynamic loader, DBC3 bytecode reader and interpreter; no device was accessed and Flutter Engine integration remains unproven.
 - iOS compiles the dynamic-enabled VM, bytecode reader and interpreter objects, then the standalone CLI target hits an exported/unexported-symbol-list linker conflict; only the real Flutter Engine link can close this gate.
+- the pinned Flutter 3.41.9 Engine already supplies a `--dart-dynamic-modules` GN option, dedicated Android/iOS DDM CI builders and `-ddm` archive rules; no new Engine flag plumbing is required on those two platforms.
 - the host store rehashes the final file before selection/health, detects disk tampering, rolls back after two incomplete boots, persists last-known-good and handles signed withdrawal input.
 
 Deliberate spike limits: AOT entry bindings are generated Dart closures, new functions are static and patch-private, the signature token tests the verifier boundary rather than cryptography, and Kernel-to-IR opcodes cover only arguments, constants, integer/string addition, comparison, branch, call and return. The existing P-256 signing smoke separately verifies the cryptographic contract.

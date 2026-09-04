@@ -29,6 +29,7 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 - Map FunctionId patch points to interpreted closures and installed AOT entries. **Host bridge passed:** `AOT -> DBC3 closure -> AOT`, including transactional rejection.
 - Run the complete upstream dynamic-module AOT semantic suite. **Passed:** 38/38, zero failure logs.
 - Cross-compile the dynamic-enabled standalone VM. **Android arm64 passed; iOS core objects passed but the non-Engine command-line target has an export-list link conflict.**
+- Reuse Flutter Engine's existing DDM GN/CI route. **Confirmed:** pinned 3.41.9 already defines Android and iOS DDM builders and archives; no new flag plumbing is needed.
 - Disable cross-function inlining only for updateable business packages.
 - Implement AOT↔interpreter bridges, then object/async/exception/GC/isolate gates.
 

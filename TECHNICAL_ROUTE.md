@@ -89,6 +89,8 @@ BUNDLED -> VERIFIED -> STAGED -> PENDING_BOOT -> HEALTHY -> LAST_KNOWN_GOOD
 
 Android 是低成本研发平台：先验证 IR、dispatch、AOT bridge、GC 和异常语义，再移植同一核心到 iOS；OHOS 最后只做平台接入和完整回归，不另造执行模型。
 
+Flutter 3.41.9 Engine 已原生提供 `tools/gn --dart-dynamic-modules`，并包含 Android arm64/x64 与 iOS 真机/模拟器的 DDM release/debug CI 配置及 `-ddm` 打包规则；Android/iOS 不新增 GN 抽象，只沿用该实验构建通道。OHOS 仍需在其锁定 Engine/Dart fork 上单独移植此开关。
+
 ## 里程碑与停止门
 
 1. **语义 spike（已通过）**：Dart CFE 把普通 fixture 编译为 Kernel；自动生成稳定 ID；单方法 diff；最小 IR；baseline/AOT 与 patch/interpreter dispatch；坏签名、baselineId、签名结构和 IR 均 fail-open。
