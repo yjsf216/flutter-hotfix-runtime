@@ -88,8 +88,8 @@ Android 是低成本研发平台：先验证 IR、dispatch、AOT bridge、GC 和
 
 ## 里程碑与停止门
 
-1. **语义 spike**：普通 Dart fixture 自动生成稳定 ID；单方法 diff；最小 IR；baseline/AOT 与 patch/interpreter dispatch；坏签名、baselineId、签名结构和 IR 均 fail-open。
-2. **Dart frontend 接入**：从 analyzer 风格 spike 切到上游 Kernel/frontend，业务源码零侵入；如果必须手工注册则停止。
+1. **语义 spike（已通过）**：Dart CFE 把普通 fixture 编译为 Kernel；自动生成稳定 ID；单方法 diff；最小 IR；baseline/AOT 与 patch/interpreter dispatch；坏签名、baselineId、签名结构和 IR 均 fail-open。
+2. **Dart frontend 接入（进行中）**：把当前 Kernel reader 移入上游 frontend 编译流水线，直接输出 metadata/IR 并生成 patch points；如果必须手工注册则停止。
 3. **AOT patch points**：业务 package 禁止跨函数内联并生成 dispatch table；性能损失超过预算则重新划定可更新 package，而不是全局关闭优化。
 4. **对象与控制流**：字段读取、虚调用、闭包/泛型、async/异常逐级通过语义 corpus。
 5. **VM 正确性**：GC root、barrier、safepoint、isolate；任何偶发内存错误都停止产品化。

@@ -12,7 +12,7 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 **Accept:** clean checkout runs test/analyze/build and records exact revisions and `libapp.so`; an authorized operator later records an arm64 device displaying `BASELINE`.  
 **Stop:** target SDK cannot reproducibly build or packaged AOT identity cannot be derived.
 
-## M1 — host Patch IR semantic spike
+## M1 — host Patch IR semantic spike (passed)
 
 - Parse ordinary baseline/updated Dart fixtures without annotations or wrappers.
 - Generate stable ClassId/FunctionId, baseline metadata, a method-level diff, and minimal class-grouped Patch IR.
@@ -22,7 +22,7 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 **Accept:** one host command compiles/runs the spike and proves every case; business fixtures contain no hot-update marker.
 **Stop:** stable identity or method-level replacement requires business-source instrumentation.
 
-## M2 — Dart frontend and AOT patch points
+## M2 — Dart frontend and AOT patch points (active)
 
 - Move the spike parser into the upstream Dart Kernel/frontend pipeline.
 - Emit class/function metadata and dispatch points automatically.

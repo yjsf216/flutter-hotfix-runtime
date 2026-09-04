@@ -1,0 +1,10 @@
+name: patch_ir_spike
+publish_to: none
+environment:
+  sdk: ^3.11.0
+dependencies:
+  kernel:
+    path: ../../work/upstream/dart-sdk/pkg/kernel
+dependency_overrides:
+  _fe_analyzer_shared:
+    path: ../../work/upstream/dart-sdk/pkg/_fe_analyzer_shared

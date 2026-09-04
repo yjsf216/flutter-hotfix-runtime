@@ -1,46 +1,66 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:kernel/kernel.dart';
+
+const logicalLibraryUri = 'package:patch_ir_spike/business.dart';
+
 void main() {
-  final baselineSource = File('fixtures/baseline.dart').readAsStringSync();
-  final updatedSource = File('fixtures/updated.dart').readAsStringSync();
-  for (final source in [baselineSource, updatedSource]) {
+  final output = Directory('.dart_tool')..createSync(recursive: true);
+  for (final name in ['baseline', 'updated']) {
+    final source = File('fixtures/$name.dart').readAsStringSync();
     if (source.contains('@') ||
         source.contains('HotSwap') ||
         source.contains('register')) {
       throw StateError('business source must stay uninstrumented');
     }
+    final entry = File('${output.path}/${name}_entry.dart')
+      ..writeAsStringSync(
+        "import '../fixtures/$name.dart';\n"
+        'void main() { GreetingService(); }\n',
+      );
+    final result = Process.runSync(Platform.resolvedExecutable, [
+      'compile',
+      'kernel',
+      entry.path,
+      '-o',
+      '${output.path}/$name.dill',
+      '--no-link-platform',
+    ]);
+    if (result.exitCode != 0) {
+      stderr.write(result.stdout);
+      stderr.write(result.stderr);
+      exitCode = result.exitCode;
+      return;
+    }
   }
 
-  final baseline = parseProgram(baselineSource);
-  final updated = parseProgram(updatedSource);
+  final baseline = loadProgram('${output.path}/baseline.dill', 'baseline.dart');
+  final updated = loadProgram('${output.path}/updated.dill', 'updated.dart');
   if (baseline.classId != updated.classId) throw StateError('unstable ClassId');
 
   final metadata = <String, Object?>{};
   for (final method in baseline.methods) {
-    final next = updated.methods
-        .where((value) => value.functionId == method.functionId)
-        .toList();
-    if (next.length != 1 || next.single.signature != method.signature) {
+    final next = updated.byId[method.functionId];
+    if (next == null || next.signature != method.signature) {
       throw StateError('method signature changed: ${method.name}');
     }
     metadata[method.functionId] = {
       'classId': baseline.classId,
       'signature': method.signature,
-      'isStatic': method.isStatic,
+      'isStatic': method.procedure.isStatic,
     };
   }
 
   final changed = <Map<String, Object?>>[];
   for (final method in updated.methods) {
-    final old = baseline.methods
-        .where((value) => value.functionId == method.functionId)
-        .single;
-    if (old.normalizedBody != method.normalizedBody) {
+    final old = baseline.byId[method.functionId];
+    if (old == null) throw StateError('new functions are the next gate');
+    if (jsonEncode(old.code) != jsonEncode(method.code)) {
       changed.add({
         'functionId': method.functionId,
         'signature': method.signature,
-        'code': compileMethod(method, updated),
+        'code': method.code,
       });
     }
   }
@@ -50,7 +70,7 @@ void main() {
     [
       baseline.classId,
       ...baseline.methods.expand(
-        (method) => [method.functionId, method.normalizedBody],
+        (method) => [method.functionId, jsonEncode(method.code)],
       ),
     ].join('|'),
   );
@@ -63,36 +83,172 @@ void main() {
     ],
   };
 
-  final output = Directory('.dart_tool')..createSync(recursive: true);
   File(
     '${output.path}/generated_runner.dart',
   ).writeAsStringSync(generateRunner(baseline, baselineId, metadata, patch));
 }
 
+KernelProgram loadProgram(String dillPath, String sourceName) {
+  final component = loadComponentFromBinary(dillPath);
+  final library = component.libraries.singleWhere(
+    (value) => value.fileUri.path.endsWith(sourceName),
+  );
+  final klass = library.classes.singleWhere(
+    (value) => value.name == 'GreetingService',
+  );
+  final classId = stableId('$logicalLibraryUri::${klass.name}');
+  final program = KernelProgram(klass.name, classId);
+  for (final procedure in klass.procedures.where(
+    (value) => !value.isSynthetic,
+  )) {
+    final signature = functionSignature(procedure);
+    final method = KernelMethod(
+      procedure,
+      stableId('$classId::$signature'),
+      signature,
+    );
+    program.methods.add(method);
+    program.byProcedure[procedure] = method;
+  }
+  for (final method in program.methods) {
+    method.code = compileBody(method.procedure, program);
+    program.byId[method.functionId] = method;
+  }
+  return program;
+}
+
+String functionSignature(Procedure procedure) {
+  final function = procedure.function;
+  final positional = function.positionalParameters
+      .map((value) => value.type.getDisplayString())
+      .join(',');
+  final named = function.namedParameters
+      .map(
+        (value) =>
+            '${value.name}:${value.type.getDisplayString()}:${value.isRequired}',
+      )
+      .join(',');
+  final typeParameters = function.typeParameters
+      .map((value) => value.bound.getDisplayString())
+      .join(',');
+  return [
+    procedure.kind.name,
+    procedure.isStatic ? 'static' : 'instance',
+    procedure.name.text,
+    '<$typeParameters>',
+    'required=${function.requiredParameterCount}',
+    'positional=($positional)',
+    'named=($named)',
+    'returns=${function.returnType.getDisplayString()}',
+  ].join('|');
+}
+
+List<List<Object?>> compileBody(Procedure procedure, KernelProgram program) {
+  final code = <List<Object?>>[];
+  final body = procedure.function.body;
+  if (body == null)
+    throw FormatException('missing body: ${procedure.name.text}');
+  compileStatement(body, procedure, program, code);
+  if (code.isEmpty || code.last[0] != 'return') {
+    throw FormatException('method must return: ${procedure.name.text}');
+  }
+  return code;
+}
+
+void compileStatement(
+  Statement statement,
+  Procedure owner,
+  KernelProgram program,
+  List<List<Object?>> code,
+) {
+  if (statement is Block) {
+    for (final child in statement.statements) {
+      compileStatement(child, owner, program, code);
+    }
+  } else if (statement is ReturnStatement) {
+    compileExpression(statement.expression!, owner, program, code);
+    code.add(['return']);
+  } else if (statement is IfStatement) {
+    if (statement.otherwise != null && statement.otherwise is! EmptyStatement) {
+      throw const FormatException('else is the next gate');
+    }
+    compileExpression(statement.condition, owner, program, code);
+    final jump = <Object?>['jumpIfFalse', 0];
+    code.add(jump);
+    compileStatement(statement.then, owner, program, code);
+    jump[1] = code.length;
+  } else {
+    throw FormatException('unsupported statement ${statement.runtimeType}');
+  }
+}
+
+void compileExpression(
+  Expression expression,
+  Procedure owner,
+  KernelProgram program,
+  List<List<Object?>> code,
+) {
+  if (expression is IntLiteral) {
+    code.add(['const', expression.value]);
+  } else if (expression is StringLiteral) {
+    code.add(['const', expression.value]);
+  } else if (expression is VariableGet) {
+    final index = owner.function.positionalParameters.indexOf(
+      expression.variable,
+    );
+    if (index < 0) throw const FormatException('locals are the next gate');
+    code.add(['arg', index]);
+  } else if (expression is InstanceInvocation &&
+      const {'+', '>'}.contains(expression.name.text)) {
+    compileExpression(expression.receiver, owner, program, code);
+    if (expression.arguments.positional.length != 1) {
+      throw const FormatException('binary arity');
+    }
+    compileExpression(
+      expression.arguments.positional.single,
+      owner,
+      program,
+      code,
+    );
+    code.add([expression.name.text == '+' ? 'add' : 'gt']);
+  } else if (expression is StaticInvocation) {
+    for (final argument in expression.arguments.positional) {
+      compileExpression(argument, owner, program, code);
+    }
+    final target = program.byProcedure[expression.target];
+    if (target == null)
+      throw const FormatException('external calls are the next gate');
+    code.add([
+      'call',
+      target.functionId,
+      expression.arguments.positional.length,
+    ]);
+  } else {
+    throw FormatException('unsupported expression ${expression.runtimeType}');
+  }
+}
+
 String generateRunner(
-  Program program,
+  KernelProgram program,
   String baselineId,
   Map<String, Object?> metadata,
   Map<String, Object?> patch,
 ) {
   final bindings = program.methods
       .map((method) {
+        final function = method.procedure.function;
         final args = [
-          for (var i = 0; i < method.parameterTypes.length; i++)
-            'args[$i] as ${method.parameterTypes[i]}',
+          for (var i = 0; i < function.positionalParameters.length; i++)
+            'args[$i] as ${function.positionalParameters[i].type.getDisplayString()}',
         ].join(', ');
-        final target = method.isStatic
+        final target = method.procedure.isStatic
             ? 'app.${program.className}.${method.name}($args)'
             : '(receiver as app.${program.className}).${method.name}($args)';
         return "'${method.functionId}': (receiver, args) => $target";
       })
       .join(',\n');
-  final describe = program.methods
-      .singleWhere((method) => method.name == 'describe')
-      .functionId;
-  final decorate = program.methods
-      .singleWhere((method) => method.name == 'decorate')
-      .functionId;
+  final describe = program.byName('describe').functionId;
+  final decorate = program.byName('decorate').functionId;
   final metadataJson = jsonEncode(metadata);
   final patchJson = jsonEncode(patch);
   return """
@@ -153,297 +309,32 @@ void main() {
   check(!bad4.install(corrupt));
   check(bad4.invoke('$describe', receiver, [15]) == 'base:high');
 
-  print('PASS: ordinary Dart -> stable IDs -> one-method Patch IR -> AOT/interpreter dispatch');
+  print('PASS: Dart CFE Kernel -> stable IDs -> one-method Patch IR');
+  print('PASS: baseline AOT bindings + changed interpreter dispatch');
   print('PASS: wrong baseline/signature/method signature/corrupt IR -> baseline');
 }
 """;
 }
 
-class Program {
-  Program(this.className, this.classId, this.methods);
+class KernelProgram {
+  KernelProgram(this.className, this.classId);
   final String className;
   final String classId;
-  final List<Method> methods;
+  final List<KernelMethod> methods = [];
+  final Map<Procedure, KernelMethod> byProcedure = {};
+  final Map<String, KernelMethod> byId = {};
+
+  KernelMethod byName(String name) =>
+      methods.singleWhere((method) => method.name == name);
 }
 
-class Method {
-  Method({
-    required this.name,
-    required this.returnType,
-    required this.parameterTypes,
-    required this.parameterNames,
-    required this.isStatic,
-    required this.body,
-    required this.functionId,
-    required this.signature,
-  });
-  final String name;
-  final String returnType;
-  final List<String> parameterTypes;
-  final List<String> parameterNames;
-  final bool isStatic;
-  final String body;
+class KernelMethod {
+  KernelMethod(this.procedure, this.functionId, this.signature);
+  final Procedure procedure;
   final String functionId;
   final String signature;
-  String get normalizedBody => body.replaceAll(RegExp(r'\s+'), ' ').trim();
-}
-
-Program parseProgram(String source) {
-  // ponytail: fixture-only parser; replace with upstream Dart frontend after this semantic gate.
-  final classMatch = RegExp(r'class\s+(\w+)\s*\{').firstMatch(source);
-  if (classMatch == null) throw const FormatException('one class required');
-  final className = classMatch.group(1)!;
-  const libraryUri = 'package:patch_ir_spike/business.dart';
-  final classId = stableId('$libraryUri::$className');
-  final open = source.indexOf('{', classMatch.start);
-  final close = matchingBrace(source, open);
-  final body = source.substring(open + 1, close);
-  final header = RegExp(r'(static\s+)?(\w+)\s+(\w+)\s*\(([^)]*)\)\s*(=>|\{)');
-  final methods = <Method>[];
-  var offset = 0;
-  while (true) {
-    final match = header.firstMatch(body.substring(offset));
-    if (match == null) break;
-    final start = match.start + offset;
-    final end = match.end + offset;
-    final marker = match.group(5)!;
-    late String methodBody;
-    late int next;
-    if (marker == '=>') {
-      next = body.indexOf(';', end);
-      if (next < 0) throw const FormatException('missing semicolon');
-      methodBody = body.substring(end, next);
-      next++;
-    } else {
-      final brace = body.indexOf('{', start);
-      final methodClose = matchingBrace(body, brace);
-      methodBody = body.substring(brace + 1, methodClose);
-      next = methodClose + 1;
-    }
-    final params = match.group(4)!.trim();
-    final parameterTypes = <String>[];
-    final parameterNames = <String>[];
-    if (params.isNotEmpty) {
-      for (final parameter in params.split(',')) {
-        final parts = parameter.trim().split(RegExp(r'\s+'));
-        if (parts.length != 2)
-          throw const FormatException('simple parameters only');
-        parameterTypes.add(parts[0]);
-        parameterNames.add(parts[1]);
-      }
-    }
-    final name = match.group(3)!;
-    final isStatic = match.group(1) != null;
-    final signature =
-        '${match.group(2)} $name(${parameterTypes.join(',')}) ${isStatic ? 'static' : 'instance'}';
-    methods.add(
-      Method(
-        name: name,
-        returnType: match.group(2)!,
-        parameterTypes: parameterTypes,
-        parameterNames: parameterNames,
-        isStatic: isStatic,
-        body: methodBody,
-        signature: signature,
-        functionId: stableId('$classId::$signature'),
-      ),
-    );
-    offset = next;
-  }
-  if (methods.isEmpty) throw const FormatException('no methods');
-  return Program(className, classId, methods);
-}
-
-int matchingBrace(String source, int open) {
-  var depth = 0;
-  for (var i = open; i < source.length; i++) {
-    if (source[i] == '{') depth++;
-    if (source[i] == '}' && --depth == 0) return i;
-  }
-  throw const FormatException('unclosed brace');
-}
-
-List<List<Object?>> compileMethod(Method method, Program program) {
-  final ifReturn = RegExp(
-    r'^\s*if\s*\((.*?)\)\s*return\s+(.*?);\s*return\s+(.*?);\s*$',
-    dotAll: true,
-  ).firstMatch(method.body);
-  final code = <List<Object?>>[];
-  void expression(String source) => compileExpression(
-    ExpressionParser(source).parse(),
-    method,
-    program,
-    code,
-  );
-  if (ifReturn == null) {
-    expression(method.body);
-    code.add(['return']);
-    return code;
-  }
-  expression(ifReturn.group(1)!);
-  final jump = ['jumpIfFalse', 0];
-  code.add(jump);
-  expression(ifReturn.group(2)!);
-  code.add(['return']);
-  jump[1] = code.length;
-  expression(ifReturn.group(3)!);
-  code.add(['return']);
-  return code;
-}
-
-void compileExpression(
-  Expr expr,
-  Method method,
-  Program program,
-  List<List<Object?>> code,
-) {
-  if (expr is LiteralExpr) {
-    code.add(['const', expr.value]);
-  } else if (expr is NameExpr) {
-    final index = method.parameterNames.indexOf(expr.name);
-    if (index < 0) throw FormatException('unknown name ${expr.name}');
-    code.add(['arg', index]);
-  } else if (expr is BinaryExpr) {
-    compileExpression(expr.left, method, program, code);
-    compileExpression(expr.right, method, program, code);
-    code.add([expr.operator == '+' ? 'add' : 'gt']);
-  } else if (expr is CallExpr) {
-    for (final argument in expr.arguments) {
-      compileExpression(argument, method, program, code);
-    }
-    final target = program.methods.singleWhere(
-      (value) =>
-          value.name == expr.name &&
-          value.parameterNames.length == expr.arguments.length,
-    );
-    code.add(['call', target.functionId, expr.arguments.length]);
-  } else {
-    throw StateError('expression compiler incomplete');
-  }
-}
-
-abstract class Expr {}
-
-class LiteralExpr extends Expr {
-  LiteralExpr(this.value);
-  final Object value;
-}
-
-class NameExpr extends Expr {
-  NameExpr(this.name);
-  final String name;
-}
-
-class BinaryExpr extends Expr {
-  BinaryExpr(this.left, this.operator, this.right);
-  final Expr left;
-  final String operator;
-  final Expr right;
-}
-
-class CallExpr extends Expr {
-  CallExpr(this.name, this.arguments);
-  final String name;
-  final List<Expr> arguments;
-}
-
-class ExpressionParser {
-  ExpressionParser(String source) : tokens = tokenize(source);
-  final List<String> tokens;
-  var index = 0;
-
-  Expr parse() {
-    final result = comparison();
-    if (index != tokens.length)
-      throw FormatException('unexpected ${tokens[index]}');
-    return result;
-  }
-
-  Expr comparison() {
-    var result = additive();
-    if (take('>')) result = BinaryExpr(result, '>', additive());
-    return result;
-  }
-
-  Expr additive() {
-    var result = primary();
-    while (take('+')) result = BinaryExpr(result, '+', primary());
-    return result;
-  }
-
-  Expr primary() {
-    if (take('(')) {
-      final result = comparison();
-      expect(')');
-      return result;
-    }
-    if (index >= tokens.length)
-      throw const FormatException('expression expected');
-    final token = tokens[index++];
-    if (token.startsWith("'"))
-      return LiteralExpr(token.substring(1, token.length - 1));
-    final number = int.tryParse(token);
-    if (number != null) return LiteralExpr(number);
-    if (take('(')) {
-      final arguments = <Expr>[];
-      if (!take(')')) {
-        do {
-          arguments.add(comparison());
-        } while (take(','));
-        expect(')');
-      }
-      return CallExpr(token, arguments);
-    }
-    return NameExpr(token);
-  }
-
-  bool take(String token) {
-    if (index < tokens.length && tokens[index] == token) {
-      index++;
-      return true;
-    }
-    return false;
-  }
-
-  void expect(String token) {
-    if (!take(token)) throw FormatException('$token expected');
-  }
-}
-
-List<String> tokenize(String source) {
-  final result = <String>[];
-  for (var i = 0; i < source.length;) {
-    final char = source[i];
-    if (RegExp(r'\s').hasMatch(char)) {
-      i++;
-      continue;
-    }
-    if (char == "'") {
-      final end = source.indexOf("'", i + 1);
-      if (end < 0) throw const FormatException('unclosed string');
-      result.add(source.substring(i, end + 1));
-      i = end + 1;
-    } else if (RegExp(r'[A-Za-z_]').hasMatch(char)) {
-      var end = i + 1;
-      while (end < source.length &&
-          RegExp(r'[A-Za-z0-9_]').hasMatch(source[end]))
-        end++;
-      result.add(source.substring(i, end));
-      i = end;
-    } else if (RegExp(r'[0-9]').hasMatch(char)) {
-      var end = i + 1;
-      while (end < source.length && RegExp(r'[0-9]').hasMatch(source[end]))
-        end++;
-      result.add(source.substring(i, end));
-      i = end;
-    } else if ('()+>,'.contains(char)) {
-      result.add(char);
-      i++;
-    } else {
-      throw FormatException('unsupported character $char');
-    }
-  }
-  return result;
+  late List<List<Object?>> code;
+  String get name => procedure.name.text;
 }
 
 String stableId(String input) {
