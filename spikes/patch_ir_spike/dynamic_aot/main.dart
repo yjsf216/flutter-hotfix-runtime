@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:dynamic_modules/dynamic_modules.dart';
 
+import '../patch_store.dart';
 import 'runtime_api.dart';
 
 const baselineId = 'dbc3-host-baseline-v1';
@@ -16,7 +17,11 @@ const releaseIdentity = <String, Object?>{
   'engineRevision': '42d3d75a56efe1a2e9902f52dc8006099c45d937',
 };
 
-Future<bool> installPatch(String manifestPath, String modulePath) async {
+Future<bool> stagePatch(
+  PatchStore store,
+  String manifestPath,
+  String modulePath,
+) async {
   try {
     final manifest = jsonDecode(File(manifestPath).readAsStringSync()) as Map;
     // ponytail: test token; platform P-256 verifier owns production signature checks.
@@ -37,8 +42,9 @@ Future<bool> installPatch(String manifestPath, String modulePath) async {
         manifest['irSha256'] != sha256.convert(bytes).toString()) {
       return false;
     }
-    installPatches(await loadModuleFromBytes(bytes));
-    return true;
+    final patchId = manifest['patchId'];
+    return patchId is String &&
+        store.install(patchId, bytes, manifest['irSha256'] as String);
   } catch (_) {
     return false;
   }
@@ -46,6 +52,8 @@ Future<bool> installPatch(String manifestPath, String modulePath) async {
 
 Future<void> main() async {
   final pricing = Pricing();
+  final storeRoot = Directory('patch-store');
+  final store = PatchStore(storeRoot);
   if (pricing.quote(3) != 4) throw StateError('baseline dispatch failed');
 
   var rejected = false;
@@ -62,19 +70,46 @@ Future<void> main() async {
     throw StateError('invalid table was partially installed');
   }
 
-  if (await installPatch('bad-manifest.json', 'modules/patch.dart.bytecode')) {
+  if (await stagePatch(
+    store,
+    'bad-manifest.json',
+    'modules/patch.dart.bytecode',
+  )) {
     throw StateError('mismatched manifest was accepted');
   }
-  if (await installPatch('manifest.json', 'modules/tampered.bytecode')) {
+  if (await stagePatch(store, 'manifest.json', 'modules/tampered.bytecode')) {
     throw StateError('tampered bytecode was accepted');
   }
   if (pricing.quote(3) != 4) throw StateError('failed patch changed baseline');
-  if (!await installPatch('manifest.json', 'modules/patch.dart.bytecode')) {
+  if (!await stagePatch(
+    store,
+    'manifest.json',
+    'modules/patch.dart.bytecode',
+  )) {
     throw StateError('valid patch was rejected');
   }
 
+  File('${storeRoot.path}/versions/p1.ir').writeAsStringSync('disk-tamper');
+  if (store.beginBoot() != PatchStore.bundled || pricing.quote(3) != 4) {
+    throw StateError('stored tamper did not fall back to baseline');
+  }
+  if (!await stagePatch(
+    store,
+    'manifest.json',
+    'modules/patch.dart.bytecode',
+  )) {
+    throw StateError('valid patch could not be restaged');
+  }
+  final selected = store.beginBoot();
+  final selectedBytes = store.readVerified(selected);
+  if (selected != 'p1' || selectedBytes == null) {
+    throw StateError('stored patch was not selected');
+  }
+  installPatches(await loadModuleFromBytes(selectedBytes));
+  if (!store.markHealthy(selected)) throw StateError('health commit failed');
+
   if (pricing.quote(3) != 37) throw StateError('patched dispatch failed');
   print(
-    'PASS: identity/digest fail-open + FunctionId AOT -> interpreted closure -> baseline AOT',
+    'PASS: verified store -> FunctionId AOT -> interpreted closure -> baseline AOT',
   );
 }

@@ -58,6 +58,17 @@ class PatchStore {
     }
   }
 
+  Uint8List? readVerified(String patchId) {
+    try {
+      final state = _read();
+      return _validArtifact(patchId, state)
+          ? _artifact(patchId).readAsBytesSync()
+          : null;
+    } on Object {
+      return null;
+    }
+  }
+
   bool markHealthy(String patchId) {
     try {
       final state = _read();

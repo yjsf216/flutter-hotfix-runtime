@@ -4,7 +4,7 @@ set -eu
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 sdk_dir=${DART_SDK_SOURCE:-"$repo_dir/work/upstream/dart-sdk"}
 out_dir="$sdk_dir/xcodebuild/ReleaseARM64"
-fixture_dir="$repo_dir/spikes/patch_ir_spike/dynamic_aot"
+fixture_dir="$repo_dir/spikes/patch_ir_spike"
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/hotfix-dbc3.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT
 mkdir "$tmp_dir/modules"
@@ -32,8 +32,8 @@ compile_kernel() {
     --output "$output" \
     --filesystem-root "$fixture_dir" \
     --filesystem-scheme dev-hotfix \
-    --dynamic-interface dev-hotfix:/dynamic_interface.yaml \
-    dev-hotfix:/main.dart
+    --dynamic-interface dev-hotfix:/dynamic_aot/dynamic_interface.yaml \
+    dev-hotfix:/dynamic_aot/main.dart
 }
 
 compile_kernel --aot "$tmp_dir/main_aot.dill"
@@ -51,11 +51,11 @@ compile_kernel --no-aot "$tmp_dir/main_no_aot.dill"
   --packages "$sdk_dir/.dart_tool/package_config.json" \
   -Ddart.vm.profile=false -Ddart.vm.product=true \
   --import-dill "$tmp_dir/main_no_aot.dill" \
-  --validate dev-hotfix:/dynamic_interface.yaml \
+  --validate dev-hotfix:/dynamic_aot/dynamic_interface.yaml \
   --filesystem-root "$fixture_dir" \
   --filesystem-scheme dev-hotfix \
   --output "$tmp_dir/modules/patch.dart.bytecode" \
-  dev-hotfix:/modules/patch.dart
+  dev-hotfix:/dynamic_aot/modules/patch.dart
 
 ir_sha256=$(shasum -a 256 "$tmp_dir/modules/patch.dart.bytecode" | awk '{print $1}')
 ir_length=$(wc -c < "$tmp_dir/modules/patch.dart.bytecode" | tr -d ' ')
@@ -63,6 +63,7 @@ printf '%s\n' \
   '{' \
   '  "signature": "valid-signature",' \
   '  "baselineId": "dbc3-host-baseline-v1",' \
+  '  "patchId": "p1",' \
   '  "identity": {' \
   '    "appId": "dev.hotfixruntime.fixture",' \
   '    "platform": "host",' \
