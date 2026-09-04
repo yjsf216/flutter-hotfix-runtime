@@ -24,7 +24,46 @@ The Flutter 3.41.9 SDK ships an AOT `dart2bytecode.dart.snapshot`. It successful
 Unsupported operation: Loading of dynamic modules is not supported.
 ```
 
-This proves the remaining runtime gate is the Engine/VM build configuration, not absence of a bytecode compiler or interpreter. It does not prove Flutter integration or platform support.
+The same pinned Dart source was then built for macOS arm64 with
+`--dart-dynamic-modules`. The build emitted `dart`, `gen_snapshot`,
+`dartaotruntime_product`, `gen_kernel_aot.dart.snapshot` and
+`dart2bytecode.dart.snapshot` with `DART_DYNAMIC_MODULES` enabled. The upstream
+`core_api` AOT test completed the full path:
+
+```text
+ordinary Dart -> Kernel with dynamic interface -> AOT ELF
+dynamic Dart module -> validated DBC3 bytecode
+AOT host -> loadModuleFromBytes -> KBC interpreter
+Test results:
+  core_api: Status.pass
+```
+
+This proves the pinned VM can execute downloaded non-machine-code DBC3 inside
+an AOT process and cross the AOT/interpreter boundary. It does not yet prove
+Flutter Engine integration or Android, iOS, or OHOS support.
+
+Reproduction uses a Dart SDK source checkout at the pinned revision:
+
+```sh
+python3 tools/build.py --mode release --arch arm64 --no-rbe \
+  --dart-dynamic-modules --exclude-kernel-service -j8 runtime
+buildtools/ninja/ninja -C xcodebuild/ReleaseARM64 \
+  gen/gen_kernel_aot.dart.snapshot gen/dart2bytecode.dart.snapshot
+xcodebuild/ReleaseARM64/dartaotruntime_product --disable-dart-dev \
+  xcodebuild/ReleaseARM64/gen/gen_kernel_aot.dart.snapshot --target vm \
+  --packages .dart_tool/package_config.json --no-aot \
+  --platform xcodebuild/ReleaseARM64/vm_platform.dill \
+  --output pkg/dynamic_modules/test/runner/work_dynamic_runner.dill \
+  pkg/dynamic_modules/test/runner/main.dart
+xcodebuild/ReleaseARM64/dart \
+  pkg/dynamic_modules/test/runner/work_dynamic_runner.dill \
+  --runtime=aot --test=core_api --verbose
+```
+
+With macOS 26 SDK, the pinned source additionally needs
+`-Wno-deprecated-declarations` because its `readdir_r` calls otherwise fail the
+old build's `-Werror` policy. This is a host-toolchain compatibility workaround,
+not a Runtime behavior change.
 
 ## Product adaptation still required
 
@@ -32,7 +71,7 @@ Upstream dynamic modules add new module declarations; they do not automatically 
 
 Required work:
 
-1. Build the Flutter-pinned VM/Engine with `dart_dynamic_modules=true` for host, then Android, iOS and OHOS.
+1. Build the Flutter-pinned Engine with `dart_dynamic_modules=true` for Android, iOS and OHOS; the standalone host VM gate has passed.
 2. Replace the temporary JSON opcode interpreter with DBC3 modules.
 3. Resolve FunctionId to a loaded interpreted `Function`, while unpatched IDs keep the installed AOT entry.
 4. Preserve the existing signed manifest, strong release binding, atomic store and boot rollback outside the experimental loader.
@@ -46,4 +85,3 @@ Required work:
 - interpreted/compiled transitions fail GC, exception, isolate or async stress tests;
 - dynamic interface cannot prevent undeclared native/plugin/FFI access;
 - Apple, Google Play or OHOS policy review rejects the resulting behavior.
-
