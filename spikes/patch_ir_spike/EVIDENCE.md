@@ -7,6 +7,8 @@ Generated: .dart_tool/generated_runner
 PASS: Dart CFE Kernel -> stable IDs -> one changed + one new method IR
 PASS: baseline AOT bindings + changed interpreter dispatch
 PASS: wrong baseline/signature/method signature/corrupt IR -> baseline
+PASS: SHA-256 + atomic files + pending boot + LKG + blacklist + withdrawal
+PASS: invalid path/digest/state and disk tamper -> safe fallback
 ```
 
 Verified properties:
@@ -19,5 +21,6 @@ Verified properties:
 - generated baseline bindings are compiled into a native host executable;
 - the changed instance method executes IR, calls the unchanged static baseline method, then calls the new interpreted static method through dispatch;
 - rejection is transactional: a bad candidate never replaces the active baseline table.
+- the host store rehashes the final file before selection/health, detects disk tampering, rolls back after two incomplete boots, persists last-known-good and handles signed withdrawal input.
 
 Deliberate spike limits: AOT entry bindings are generated Dart closures, new functions are static and patch-private, the signature token tests the verifier boundary rather than cryptography, and Kernel-to-IR opcodes cover only arguments, constants, integer/string addition, comparison, branch, call and return. The existing P-256 signing smoke separately verifies the cryptographic contract.

@@ -18,7 +18,9 @@ fi
 
 test "$(git -C "$dart_source" rev-parse HEAD)" = "$dart_revision"
 "$dart_bin" pub get
-"$dart_bin" format runtime.dart tool/build.dart fixtures
+"$dart_bin" format runtime.dart patch_store.dart tool fixtures
 "$dart_bin" tool/build.dart
 "$dart_bin" compile exe .dart_tool/generated_runner.dart -o .dart_tool/generated_runner
 .dart_tool/generated_runner
+"$dart_bin" compile exe tool/store_check.dart -o .dart_tool/store_check
+.dart_tool/store_check
