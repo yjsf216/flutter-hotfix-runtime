@@ -5,7 +5,7 @@ import 'package:kernel/kernel.dart';
 
 const logicalLibraryUri = 'package:patch_ir_spike/business.dart';
 
-void main() {
+Future<void> main() async {
   final output = Directory('.dart_tool')..createSync(recursive: true);
   for (final name in [
     'baseline',
@@ -134,6 +134,91 @@ void main() {
   File('${output.path}/generated_runner.dart').writeAsStringSync(
     generateRunner(baseline, baselineId, identity, metadata, patch),
   );
+  await buildPatchPointDill(output, baseline);
+}
+
+Future<void> buildPatchPointDill(
+  Directory output,
+  KernelProgram baseline,
+) async {
+  final describeId = baseline.byName('describe').functionId;
+  final entry = File('${output.path}/patch_point_entry.dart')
+    ..writeAsStringSync('''
+import '../fixtures/baseline.dart';
+import '../fixtures/patch_hook.dart' as hook;
+
+void check(bool value) {
+  if (!value) throw StateError('Kernel patch-point check failed');
+}
+
+void main() {
+  final service = GreetingService();
+  check(service.describe(15) == 'base:high');
+  hook.isPatched = (id) => id == '$describeId';
+  hook.dispatch = (id, receiver, arguments) => 'patched-via-kernel';
+  check(service.describe(15) == 'patched-via-kernel');
+  check(GreetingService.decorate('direct') == 'base:direct');
+  print('PASS: transformed Kernel method entry dispatches before baseline AOT body');
+}
+''');
+  final result = Process.runSync(Platform.resolvedExecutable, [
+    'compile',
+    'kernel',
+    entry.path,
+    '-o',
+    '${output.path}/patch_point_input.dill',
+  ]);
+  if (result.exitCode != 0) {
+    throw StateError('${result.stdout}\n${result.stderr}');
+  }
+
+  final component = loadComponentFromBinary(
+    '${output.path}/patch_point_input.dill',
+  );
+  final business = component.libraries.singleWhere(
+    (library) => library.fileUri.path.endsWith('baseline.dart'),
+  );
+  final hooks = component.libraries.singleWhere(
+    (library) => library.fileUri.path.endsWith('patch_hook.dart'),
+  );
+  final hasPatch = hooks.procedures.singleWhere(
+    (procedure) => procedure.name.text == 'hotfixHasPatch',
+  );
+  final invokePatch = hooks.procedures.singleWhere(
+    (procedure) => procedure.name.text == 'hotfixInvoke',
+  );
+  final klass = business.classes.singleWhere(
+    (value) => value.name == baseline.className,
+  );
+  for (final procedure in klass.procedures.where(
+    (value) => !value.isSynthetic,
+  )) {
+    final original = procedure.function.body;
+    if (original == null || procedure.function.namedParameters.isNotEmpty) {
+      throw const FormatException('patch-point shape is the next gate');
+    }
+    final id = stableId('${baseline.classId}::${functionSignature(procedure)}');
+    final patchCall = StaticInvocation(
+      invokePatch,
+      Arguments([
+        StringLiteral(id),
+        procedure.isStatic ? NullLiteral() : ThisExpression(),
+        ListLiteral([
+          for (final parameter in procedure.function.positionalParameters)
+            VariableGet(parameter),
+        ]),
+      ]),
+    );
+    procedure.function.body = Block([
+      IfStatement(
+        StaticInvocation(hasPatch, Arguments([StringLiteral(id)])),
+        ReturnStatement(AsExpression(patchCall, procedure.function.returnType)),
+        null,
+      ),
+      original,
+    ]);
+  }
+  await writeComponentToBinary(component, '${output.path}/patch_point.dill');
 }
 
 KernelProgram loadProgram(String dillPath, String sourceName) {

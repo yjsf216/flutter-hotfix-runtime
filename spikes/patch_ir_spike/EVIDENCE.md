@@ -9,6 +9,7 @@ PASS: Kernel compatibility rejects field layout and signature changes
 PASS: baseline AOT bindings + changed interpreter dispatch
 PASS: wrong baseline/signature/method signature/corrupt IR -> baseline
 PASS: every release identity mismatch -> baseline
+PASS: transformed Kernel method entry dispatches before baseline AOT body
 PASS: SHA-256 + atomic files + pending boot + LKG + blacklist + withdrawal
 PASS: invalid path/digest/state and disk tamper -> safe fallback
 ```
@@ -25,6 +26,7 @@ Verified properties:
 - the changed instance method executes IR, calls the unchanged static baseline method, then calls the new interpreted static method through dispatch;
 - rejection is transactional: a bad candidate never replaces the active baseline table.
 - appId, platform, ABI, release, Flutter/Dart/Engine revision, flavor, channel and build-parameter digest are each mutated independently and rejected before IR activation.
+- a compiler-side Kernel AST transform injects patch checks into ordinary business methods, writes a new `.dill`, and compiles it to a native executable; the selected instance method dispatches while an unselected static method executes its original AOT body.
 - the host store rehashes the final file before selection/health, detects disk tampering, rolls back after two incomplete boots, persists last-known-good and handles signed withdrawal input.
 
 Deliberate spike limits: AOT entry bindings are generated Dart closures, new functions are static and patch-private, the signature token tests the verifier boundary rather than cryptography, and Kernel-to-IR opcodes cover only arguments, constants, integer/string addition, comparison, branch, call and return. The existing P-256 signing smoke separately verifies the cryptographic contract.

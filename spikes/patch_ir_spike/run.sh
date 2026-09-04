@@ -22,5 +22,7 @@ test "$(git -C "$dart_source" rev-parse HEAD)" = "$dart_revision"
 "$dart_bin" tool/build.dart
 "$dart_bin" compile exe .dart_tool/generated_runner.dart -o .dart_tool/generated_runner
 .dart_tool/generated_runner
+"$dart_bin" compile exe .dart_tool/patch_point.dill -o .dart_tool/patch_point_runner
+.dart_tool/patch_point_runner
 "$dart_bin" compile exe tool/store_check.dart -o .dart_tool/store_check
 .dart_tool/store_check

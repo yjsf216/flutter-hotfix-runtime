@@ -9,7 +9,7 @@ Independent, self-hosted research and implementation of a signed Flutter Patch I
 | Manifest/security contract | host signing/store checks | platform verifier and key rotation |
 | Android 3.41.9 baseline | host build verified | device validation is manual and not run by this task |
 | Android external `libapp.so` | research/benchmark only | not a store production backend |
-| Unified Patch IR Runtime | host semantic spike passed | upstream Dart frontend and AOT patch points |
+| Unified Patch IR Runtime | Kernel IR + AOT patch-point host spikes passed | native AOT entry bridge and VM frames |
 | OHOS 3.27.5-ohos-1.0.5 | embedder path located | shared Runtime port after Android/iOS gates |
 | iOS | research only | interpreter/linker feasibility gate passes |
 
@@ -42,7 +42,7 @@ DART_BIN=/path/to/flutter/bin/dart \
   sh spikes/patch_ir_spike/run.sh
 ```
 
-This compiles two ordinary Dart class sources through the pinned Dart CFE/Kernel into stable metadata and Patch IR, generates baseline dispatch bindings, compiles the runner to a native host executable, then verifies baseline/AOT and patch/interpreter paths. Wrong baseline ID, transport signature token, method signature, and opcode all fail open to baseline. A second native check covers SHA-256, atomic storage, pending boot, last-known-good, blacklist, withdrawal and disk tampering.
+This compiles ordinary Dart sources through the pinned Dart CFE/Kernel into stable metadata and Patch IR, injects method-entry patch points directly into Kernel AST, and compiles the transformed program to a native host executable. It verifies baseline/AOT and patch/interpreter paths plus mismatch rejection. A second native check covers SHA-256, atomic storage, pending boot, last-known-good, blacklist, withdrawal and disk tampering.
 
 The external `libapp.so` work is retained only as loading-chain research and an AOT performance baseline. It is not the Android store production backend.
 

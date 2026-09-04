@@ -22,10 +22,10 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 **Accept:** one host command compiles/runs the spike and proves every case; business fixtures contain no hot-update marker.
 **Stop:** stable identity or method-level replacement requires business-source instrumentation.
 
-## M2 — Dart frontend and AOT patch points (active)
+## M2 — Dart frontend and AOT patch points (host entry transform passed)
 
-- Move the spike parser into the upstream Dart Kernel/frontend pipeline.
-- Emit class/function metadata and dispatch points automatically.
+- Integrate the proven external Kernel transform into the upstream Dart frontend pipeline.
+- Replace generated Dart closures with native AOT entry metadata and bridge calls.
 - Disable cross-function inlining only for updateable business packages.
 - Implement AOT↔interpreter bridges, then object/async/exception/GC/isolate gates.
 
