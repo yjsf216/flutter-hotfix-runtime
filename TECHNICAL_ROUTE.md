@@ -1,6 +1,6 @@
-# 全平台 Flutter 热更新技术路线
+# Android、iOS、OHOS Flutter 热更新技术路线
 
-获取日期：2026-09-04。目标平台包括 Android、iOS、OpenHarmony/HarmonyOS、Windows、Linux、macOS 和 Web；当前研发优先级仍为 Android → OHOS → iOS，桌面和 Web 不阻塞前三个平台。
+获取日期：2026-09-04。目标平台仅包括 Android、iOS 和 OpenHarmony/HarmonyOS；研发优先级为 Android → OHOS → iOS。
 
 ## 1. 核心结论
 
@@ -12,9 +12,6 @@
     +-- Android -------- 完整、已签名的 libapp.so
     +-- OHOS ----------- 完整、已签名的 libapp.so
     +-- iOS ------------ 非机器码 Patch IR + 内置解释器/AOT linker
-    +-- Windows/Linux -- 完整、已签名的 AOT snapshot/library
-    +-- macOS ---------- 独立分发可签名 AOT；App Store 走解释器
-    +-- Web ------------ 版本化 JS/Wasm 静态资源
 ```
 
 第一版不做二进制差分。完整产物更容易验证和回滚；只有补丁体积经过真实统计成为问题后，才在传输层增加 bsdiff/zstd，安装后仍校验完整产物 SHA-256。
@@ -64,10 +61,6 @@ BUNDLED -> DOWNLOADED -> VERIFIED -> STAGED -> PENDING_BOOT
 | Android | app 私有目录完整 `libapp.so` | spike 可不改；生产建议小改 | OEM/SELinux、snapshot 混装、Play 政策 |
 | OHOS | app sandbox 完整 `libapp.so` | 需要 | linker namespace、签名/市场策略、loader 缺少路径校验 |
 | iOS | Patch IR 解释执行，未变函数复用包内 AOT | Dart SDK/VM 深度改造 | GC/异常/isolate/FFI、性能、审核 |
-| Windows | 完整 AOT library/snapshot | 小型 embedder 改造 | 文件占用、杀软、签名与更新原子性 |
-| Linux | 完整 `libapp.so` | 小型 embedder 改造 | 发行版 ABI、挂载 `noexec`、打包格式 |
-| macOS | 独立分发：Developer ID 签名/公证 AOT；App Store：解释器 | 分发模式决定 | Hardened Runtime/library validation、审核 |
-| Web | CDN 版本化 JS/Wasm + Service Worker | 不改 Engine | 缓存一致性、回退、正在运行页面迁移 |
 
 ### 3.1 Android
 
@@ -112,23 +105,6 @@ iOS 按以下顺序推进，任何一级失败都停止产品化：
 
 最大技术难点不是“写一个 Dart 语法解释器”，而是让解释帧与 AOT 帧共享同一对象模型、GC 和异常语义，并在编译器优化后仍能稳定识别、链接 baseline 函数。实现必须基于上游 `dart-lang/sdk`；Shorebird 的公开架构只作为验证路线可行性的先例，不依赖其不可获得源码。
 
-### 3.4 Windows 与 Linux
-
-复用 Android/OHOS 的完整 AOT 产物模型和共同 verifier。平台 runner/embedder 在创建 Engine 前选择已验证 snapshot/library mapping。Windows 额外处理 DLL/文件占用，采用版本目录和指针文件切换；Linux 检测文件系统 `noexec`、glibc/发行版与 CPU ABI。先支持自部署包，再研究商店包。
-
-### 3.5 macOS
-
-拆成两个产品配置：
-
-- Developer ID 独立分发：研究对补丁库进行 Developer ID 签名与公证，并保持 Hardened Runtime/library validation；不默认关闭安全 entitlement。
-- Mac App Store：沿用 iOS Patch IR 解释器，避免下载 native code。
-
-不能为了热更新默认启用 `disable-library-validation` 或 unsigned executable memory；这会扩大攻击面并改变公证/审核风险。
-
-### 3.6 Web
-
-Web 不接入 native Runtime patch。构建内容寻址的 JS/Wasm 与 assets，channel manifest 指向完整版本；Service Worker 预取并原子切换缓存，加载失败回退上一缓存。正在运行的页面不替换代码，下一次导航或刷新生效。灰度最好由 CDN/边缘路由完成。
-
 ## 4. 交付顺序与停止点
 
 1. **共同协议**：manifest、签名、verifier、原子安装、状态机的主机测试。
@@ -137,7 +113,6 @@ Web 不接入 native Runtime patch。构建内容寻址的 JS/Wasm 与 assets，
 4. **iOS feasibility**：只做 Dart SDK 最小语义 corpus；GC/异常/isolate 任一无法证明正确即停止。
 5. **Android/OHOS 生产硬化**：灰度、撤回、观测、演练和合规签字。
 6. **iOS 扩面**：只有 feasibility 和审核门都通过才接 Flutter widget 与生产业务。
-7. **Windows/Linux/macOS/Web**：复用已经稳定的共同平面，不反向拖慢移动端。
 
 ## 5. 明确不做
 
@@ -147,7 +122,7 @@ Web 不接入 native Runtime patch。构建内容寻址的 JS/Wasm 与 assets，
 - 不允许跨 Engine/Dart revision 使用 patch。
 - 不用 MD5/CRC 作为安全完整性校验。
 - 不在关键加载链路 fail-closed 导致 App 无法启动。
-- 不宣称“全平台可用”，直到各平台的重复设备/系统矩阵和商店风险门通过。
+- 不宣称三个平台可用，直到各自的重复设备/系统矩阵和商店风险门通过。
 
 ## 6. 一手资料
 
@@ -155,12 +130,9 @@ Web 不接入 native Runtime patch。构建内容寻址的 JS/Wasm 与 assets，
 - [Flutter snapshot resolver](https://github.com/flutter/flutter/blob/3.41.9/engine/src/flutter/runtime/dart_snapshot.cc)
 - [Flutter AOT operation](https://github.com/flutter/flutter/blob/3.41.9/docs/engine/Flutter-engine-operation-in-AOT-Mode.md)
 - [Flutter architecture and embedders](https://docs.flutter.dev/resources/architectural-overview)
-- [Flutter supported deployment platforms](https://docs.flutter.dev/reference/supported-platforms)
 - [OpenHarmony-SIG FlutterLoader](https://gitee.com/openharmony-sig/flutter_engine/blob/master/shell/platform/ohos/flutter_embedding/flutter/src/main/ets/embedding/engine/loader/FlutterLoader.ets)
 - [OpenHarmony-SIG OhosMain](https://gitee.com/openharmony-sig/flutter_engine/blob/master/shell/platform/ohos/ohos_main.cpp)
 - [HarmonyOS C/C++ dynamic linker namespace](https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/c-cpp-overview)
 - [Apple App Review Guidelines 2.5.2](https://developer.apple.com/cn/app-store/review/guidelines/)
-- [Apple library validation entitlement](https://developer.apple.com/documentation/BundleResources/Entitlements/com.apple.security.cs.disable-library-validation)
 - [Shorebird public system architecture](https://docs.shorebird.dev/code-push/system-architecture/)
 - [Google Play policy responsibilities](https://support.google.com/googleplay/android-developer/answer/9899234)
-
