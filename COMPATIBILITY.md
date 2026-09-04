@@ -8,6 +8,10 @@
 | Android | same | armeabi-v7a, x86_64 | planned | device/emulator and packaging coverage |
 | OHOS/HarmonyOS | Flutter 3.27.5-ohos-1.0.5, Dart 3.6.2, Engine `e672b006cb` | ohos-arm64 first | source-confirmed only | real search order, private writable executable mapping, HAP/store policy |
 | iOS | Flutter 3.41.9 baseline; upstream Dart fork TBD | arm64 | research only | safe AOT/interpreter linkage and App Review acceptance |
+| Windows | Flutter revision TBD after mobile gates | x64, arm64 | deferred | coherent snapshot mapping, file locking, signing/store policy |
+| Linux | Flutter revision TBD after mobile gates | x64, arm64 | deferred | glibc/distro matrix and executable mount policy |
+| macOS | Flutter 3.41.9 baseline research | arm64 first | deferred | Developer ID vs Mac App Store execution policy |
+| Web | Flutter revision TBD after mobile gates | JavaScript, Wasm | deferred | versioned cache activation and rollback consistency |
 
 ## Compatibility rule
 

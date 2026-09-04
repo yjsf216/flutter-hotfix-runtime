@@ -52,6 +52,15 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 **Accept feasibility:** no downloaded machine code; deterministic linker; semantic parity corpus passes; overhead and patch size meet explicit budgets; store/legal gate is positive.  
 **Stop:** any correctness gap in GC/exception/isolate safety, required private Shorebird source, unacceptable performance, or policy rejection.
 
+## M5 — desktop and Web expansion
+
+- Reuse the verified release contract and state machine for Windows/Linux AOT artifacts.
+- Split macOS into Developer ID and Mac App Store execution policies.
+- Use ordinary versioned JS/Wasm deployment and Service Worker rollback for Web.
+
+**Accept:** each target has a reproducible build, platform-native install/update path, rollback drill, and distribution-policy review.
+**Stop:** platform signing or sandbox requirements require weakening default runtime protections.
+
 ## Deferred until demanded
 
 Backend APIs, UI console, RBAC, multi-tenancy, databases, and complex approvals stay out. Static signed manifests and object storage are enough until measured rollout/audit needs prove otherwise.

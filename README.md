@@ -54,7 +54,7 @@ Acceptance is deliberately strict:
 4. A forced crash before the launch-success checkpoint increments the boot attempt, blacklists the patch at the threshold, and restores last-known-good on the next launch.
 5. Every command, device ABI, engine revision, manifest digest, selection decision, and rollback result is captured as test evidence.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md), [PLAN.md](PLAN.md), [COMPATIBILITY.md](COMPATIBILITY.md), and [SECURITY.md](SECURITY.md).
+See [TECHNICAL_ROUTE.md](TECHNICAL_ROUTE.md), [ARCHITECTURE.md](ARCHITECTURE.md), [PLAN.md](PLAN.md), [COMPATIBILITY.md](COMPATIBILITY.md), and [SECURITY.md](SECURITY.md).
 
 ## Explicit non-goals for now
 
