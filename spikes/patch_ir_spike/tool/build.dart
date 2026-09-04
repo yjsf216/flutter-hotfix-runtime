@@ -53,10 +53,21 @@ void main() {
   }
 
   final changed = <Map<String, Object?>>[];
+  var changedBodies = 0;
+  var newFunctions = 0;
   for (final method in updated.methods) {
     final old = baseline.byId[method.functionId];
-    if (old == null) throw StateError('new functions are the next gate');
-    if (jsonEncode(old.code) != jsonEncode(method.code)) {
+    if (old == null) {
+      newFunctions++;
+      changed.add({
+        'functionId': method.functionId,
+        'signature': method.signature,
+        'isNew': true,
+        'isStatic': method.procedure.isStatic,
+        'code': method.code,
+      });
+    } else if (jsonEncode(old.code) != jsonEncode(method.code)) {
+      changedBodies++;
       changed.add({
         'functionId': method.functionId,
         'signature': method.signature,
@@ -64,7 +75,9 @@ void main() {
       });
     }
   }
-  if (changed.length != 1) throw StateError('expected one changed method');
+  if (changedBodies != 1 || newFunctions != 1) {
+    throw StateError('expected one changed and one new method');
+  }
 
   final baselineId = stableId(
     [
@@ -281,8 +294,8 @@ void main() {
 
   final valid = runtime(metadata);
   check(valid.install(patch));
-  check(valid.invoke('$describe', receiver, [15]) == 'base:patched-low');
-  check(valid.interpreterHits == 1 && valid.baselineHits == 1);
+  check(valid.invoke('$describe', receiver, [15]) == 'base:patched-low!');
+  check(valid.interpreterHits == 2 && valid.baselineHits == 1);
   check(valid.invoke('$decorate', null, ['direct']) == 'base:direct');
 
   final wrongBaseline = clone(patch)..['baselineId'] = 'wrong';
@@ -297,7 +310,10 @@ void main() {
 
   final wrongMethod = clone(patch);
   final wrongMethods = ((wrongMethod['classes'] as List).first as Map)['methods'] as List;
-  (wrongMethods.first as Map)['signature'] = 'changed signature';
+  final existingMethod = wrongMethods.cast<Map>().singleWhere(
+    (method) => method['isNew'] != true,
+  );
+  existingMethod['signature'] = 'changed signature';
   final bad3 = runtime(metadata);
   check(!bad3.install(wrongMethod));
   check(bad3.invoke('$describe', receiver, [15]) == 'base:high');
@@ -309,7 +325,7 @@ void main() {
   check(!bad4.install(corrupt));
   check(bad4.invoke('$describe', receiver, [15]) == 'base:high');
 
-  print('PASS: Dart CFE Kernel -> stable IDs -> one-method Patch IR');
+  print('PASS: Dart CFE Kernel -> stable IDs -> one changed + one new method IR');
   print('PASS: baseline AOT bindings + changed interpreter dispatch');
   print('PASS: wrong baseline/signature/method signature/corrupt IR -> baseline');
 }

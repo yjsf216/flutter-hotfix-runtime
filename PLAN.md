@@ -15,7 +15,7 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 ## M1 — host Patch IR semantic spike (passed)
 
 - Parse ordinary baseline/updated Dart fixtures without annotations or wrappers.
-- Generate stable ClassId/FunctionId, baseline metadata, a method-level diff, and minimal class-grouped Patch IR.
+- Generate stable ClassId/FunctionId, baseline metadata, a method-level diff, and minimal class-grouped Patch IR with a patch-private new function.
 - Dispatch unchanged functions to baseline implementations and changed functions to the interpreter.
 - Reject bad signature, baselineId, method signature, and malformed IR while continuing baseline.
 

@@ -6,12 +6,15 @@ class PatchRuntime {
     required this.baselineId,
     required this.metadata,
     required this.baselineFunctions,
-  });
+  }) : _activeMetadata = {
+         for (final entry in metadata.entries) entry.key: Map.of(entry.value),
+       };
 
   final String baselineId;
   final Map<String, Map<String, Object?>> metadata;
   final Map<String, BaselineFunction> baselineFunctions;
   Map<String, List<List<Object?>>> _patch = const {};
+  Map<String, Map<String, Object?>> _activeMetadata;
   int baselineHits = 0;
   int interpreterHits = 0;
 
@@ -34,32 +37,58 @@ class PatchRuntime {
         return false;
       }
       final next = <String, List<List<Object?>>>{};
+      final nextMetadata = {
+        for (final entry in metadata.entries) entry.key: Map.of(entry.value),
+      };
       for (final classPatch in candidate['classes'] as List<Object?>) {
         final typedClass = classPatch as Map<String, Object?>;
         final classId = typedClass['classId'];
+        if (classId is! String ||
+            !metadata.values.any((value) => value['classId'] == classId)) {
+          return false;
+        }
         final methods = typedClass['methods'] as List<Object?>;
         for (final value in methods) {
           final method = value as Map<String, Object?>;
           final id = method['functionId'] as String;
-          if (metadata[id]?['classId'] != classId ||
-              metadata[id]?['signature'] != method['signature']) {
+          if (next.containsKey(id)) return false;
+          final baseline = metadata[id];
+          if (baseline == null) {
+            if (method['isNew'] != true ||
+                method['isStatic'] != true ||
+                method['signature'] is! String) {
+              return false;
+            }
+            nextMetadata[id] = {
+              'classId': classId,
+              'signature': method['signature'],
+              'isStatic': method['isStatic'],
+            };
+          } else if (baseline['classId'] != classId ||
+              baseline['signature'] != method['signature']) {
             return false;
           }
           final code = (method['code'] as List<Object?>)
               .map((op) => (op as List<Object?>).toList())
               .toList();
-          _validate(code);
           next[id] = code;
         }
       }
+      for (final code in next.values) {
+        _validate(code, nextMetadata);
+      }
       _patch = next;
+      _activeMetadata = nextMetadata;
       return true;
     } on Object {
       return false;
     }
   }
 
-  void _validate(List<List<Object?>> code) {
+  void _validate(
+    List<List<Object?>> code,
+    Map<String, Map<String, Object?>> candidateMetadata,
+  ) {
     if (code.isEmpty) throw const FormatException('empty IR');
     for (var pc = 0; pc < code.length; pc++) {
       final op = code[pc];
@@ -79,7 +108,9 @@ class PatchRuntime {
         throw FormatException('bad arg at $pc');
       }
       if (op[0] == 'call' &&
-          (op.length != 3 || metadata[op[1]] == null || op[2] is! int)) {
+          (op.length != 3 ||
+              candidateMetadata[op[1]] == null ||
+              op[2] is! int)) {
         throw FormatException('bad call at $pc');
       }
       if (op[0] == 'jumpIfFalse' &&
@@ -127,7 +158,7 @@ class PatchRuntime {
           final callArgs = stack.sublist(stack.length - count);
           stack.removeRange(stack.length - count, stack.length);
           final target = op[1] as String;
-          final targetReceiver = metadata[target]!['isStatic'] as bool
+          final targetReceiver = _activeMetadata[target]!['isStatic'] as bool
               ? null
               : receiver;
           stack.add(invoke(target, targetReceiver, callArgs));
