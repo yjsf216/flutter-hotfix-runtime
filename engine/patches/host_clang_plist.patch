@@ -1,0 +1,98 @@
+diff --git a/engine/src/flutter/build/copy_info_plist.py b/engine/src/flutter/build/copy_info_plist.py
+index de90f0dc23c..e960a6483cf 100644
+--- a/engine/src/flutter/build/copy_info_plist.py
++++ b/engine/src/flutter/build/copy_info_plist.py
+@@ -9,6 +9,7 @@ Copies the Info.plist and adds extra fields to it like the git hash of the
+ engine.
+
+ usage: copy_info_plist.py --source <src_path> --destination <dest_path>
++                          --clang <host_clang_path>
+                           --minversion=<deployment_target>
+                           --buildmode=<build_mode>
+ """
+@@ -23,10 +24,7 @@ _script_dir = os.path.abspath(os.path.join(os.path.realpath(__file__), '..'))
+ _src_root_dir = os.path.join(_script_dir, '..', '..')
+
+
+-def get_clang_version():
+-  clang_executable = str(
+-      os.path.join(_src_root_dir, 'flutter', 'buildtools', 'mac-x64', 'clang', 'bin', 'clang++')
+-  )
++def get_clang_version(clang_executable):
+   version = subprocess.check_output([clang_executable, '--version'])
+   return version.splitlines()[0]
+
+@@ -46,13 +44,14 @@ def main():
+   )
+   parser.add_argument('--minversion', help='Minimum device OS version like "9.0"', type=str)
+   parser.add_argument('--buildmode', help='Build Mode like Debug, Profile, Release', type=str)
++  parser.add_argument('--clang', help='GN-selected host Clang executable', required=True)
+
+   args = parser.parse_args()
+
+   text = open(args.source).read()
+   engine_path = os.path.join(_src_root_dir, 'flutter')
+   revision = git_revision.get_repository_version(engine_path)
+-  clang_version = get_clang_version()
++  clang_version = get_clang_version(args.clang)
+   text = text.format(
+       revision=revision,
+       clang_version=clang_version,
+diff --git a/engine/src/flutter/shell/platform/darwin/ios/BUILD.gn b/engine/src/flutter/shell/platform/darwin/ios/BUILD.gn
+index 911ee431e25..9edb6066788 100644
+--- a/engine/src/flutter/shell/platform/darwin/ios/BUILD.gn
++++ b/engine/src/flutter/shell/platform/darwin/ios/BUILD.gn
+@@ -356,6 +356,9 @@ action("copy_framework_info_plist") {
+   sources = [ "framework/Info.plist" ]
+   outputs = [ "$_flutter_framework_dir/Info.plist" ]
+   args = [
++    "--clang",
++    rebase_path("$buildtools_path/mac-$host_cpu/clang/bin/clang++",
++                root_build_dir),
+     "--source",
+     rebase_path(sources[0]),
+     "--destination",
+diff --git a/engine/src/flutter/shell/platform/darwin/macos/BUILD.gn b/engine/src/flutter/shell/platform/darwin/macos/BUILD.gn
+index bc69c85f797..30c63b86ecc 100644
+--- a/engine/src/flutter/shell/platform/darwin/macos/BUILD.gn
++++ b/engine/src/flutter/shell/platform/darwin/macos/BUILD.gn
+@@ -5,6 +5,7 @@
+ assert(is_mac)
+
+ import("//build/config/darwin/darwin_sdk.gni")
++import("//build/toolchain/toolchain.gni")
+ import("//flutter/build/zip_bundle.gni")
+ import("//flutter/shell/gpu/gpu.gni")
+ import("//flutter/shell/platform/darwin/common/framework_common.gni")
+@@ -282,6 +283,9 @@ action("copy_framework_info_plist") {
+   sources = [ "framework/Info.plist" ]
+   outputs = [ "$_flutter_framework_dir/Versions/A/Resources/Info.plist" ]
+   args = [
++    "--clang",
++    rebase_path("$buildtools_path/mac-$host_cpu/clang/bin/clang++",
++                root_build_dir),
+     "--source",
+     rebase_path(sources[0]),
+     "--destination",
+diff --git a/engine/src/flutter/shell/platform/embedder/BUILD.gn b/engine/src/flutter/shell/platform/embedder/BUILD.gn
+index de073b38654..5c63ca74df5 100644
+--- a/engine/src/flutter/shell/platform/embedder/BUILD.gn
++++ b/engine/src/flutter/shell/platform/embedder/BUILD.gn
+@@ -3,6 +3,7 @@
+ # found in the LICENSE file.
+
+ import("//build/toolchain/clang.gni")
++import("//build/toolchain/toolchain.gni")
+ import("//flutter/build/zip_bundle.gni")
+ import("//flutter/common/config.gni")
+ import("//flutter/impeller/tools/impeller.gni")
+@@ -493,6 +494,9 @@ if (is_mac && !embedder_for_target) {
+     outputs =
+         [ "$_flutter_embedder_framework_dir/Versions/A/Resources/Info.plist" ]
+     args = [
++      "--clang",
++      rebase_path("$buildtools_path/mac-$host_cpu/clang/bin/clang++",
++                  root_build_dir),
+       "--source",
+       rebase_path(sources[0]),
+       "--destination",

@@ -34,8 +34,10 @@ already-resolved `third_party` and bootstrap SDK files were copied with macOS
 APFS clone-on-write (`cp -cR`), not mutable hard links, and excluded from gclient
 updates. These clones depend on the source Git object stores remaining available.
 Source synchronization for the selected host embedder target has completed.
-The matching Clang package is still being installed; native Engine compilation
-and linking are **not yet verified**.
+The matching Clang package is installed; `clang --version` reports revision
+`8c7a2ce01a77c96028fe2c8566f65c45ad9408d3`, and CIPD's installed receipt matches
+`host-clang.ensure`. Actual native compilation has started with `-j2`; the full
+Engine build, linking and execution are **not yet verified**.
 
 Five additional Engine dependencies were seeded from local Git objects with exact
 revision checks: BoringSSL, protobuf, libc++, libc++abi and LLVM libc. The existing
@@ -60,6 +62,14 @@ python3 /path/to/depot_tools/gclient.py sync \
   --nohooks --noprehooks --no-history --shallow --no-bootstrap \
   --ignore-dep-type=cipd --jobs=2
 ```
+
+Apply `engine/patches/host_clang_plist.patch` with `git apply` from the isolated
+Flutter checkout root before configuration. It fixes an observed build failure:
+the upstream plist script hardcodes an x64 Clang path even on an arm64 host.
+All three plist callers now pass GN's actual host compiler path, respecting
+`host_cpu` and `buildtools_path`; neither another toolchain nor a compatibility
+symlink is required. The host wrapper checks that this patch is present.
+The patched plist action has executed successfully in the actual Ninja build.
 
 Use the already authorized HTTP/SOCKS proxy if Googlesource cannot be reached.
 The separate source pass avoids downloading every CIPD payload while disk space

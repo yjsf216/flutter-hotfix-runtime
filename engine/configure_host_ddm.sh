@@ -4,6 +4,10 @@ set -eu
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 engine_dir=${1:-"$repo_dir/work/upstream/flutter-engine-ddm"}
 test "$(git -C "$engine_dir" rev-parse HEAD)" = 00b0c91f06209d9e4a41f71b7a512d6eb3b9c694
+git -C "$engine_dir" apply --reverse --check "$repo_dir/engine/patches/host_clang_plist.patch" || {
+  echo 'FAIL: apply engine/patches/host_clang_plist.patch to the isolated Engine checkout first' >&2
+  exit 1
+}
 export PATH="$repo_dir/work/upstream/depot_tools:$PATH"
 export VPYTHON_BYPASS='manually managed python not supported by chrome operations'
 cd "$engine_dir/engine/src"
