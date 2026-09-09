@@ -1,5 +1,36 @@
 # Patch IR spike evidence
 
+## Frozen release / Flutter / native storage integration
+
+- Separate release and patch phases pass after the old entry source is removed
+  and business source is updated at the same original path. Baseline AOT, input
+  Kernel and release descriptor are byte-for-byte unchanged; corrupted frozen
+  Kernel and mismatched compiler fingerprints are rejected.
+- File and package entry aliases preserve same-directory and `../` imports.
+  AOT execution still returns the frozen dependency values after their on-disk
+  sources are deliberately changed, proving the patch does not recompile them.
+- A real Flutter target compiles a StatelessWidget/Text/dart:ui baseline to an
+  AOT snapshot and one generated DBC3 module. Framework is retained only in the
+  baseline. Loading/rendering in a Flutter Engine is still unverified.
+- The signed generated-patch AOT test now uses bundled C file operations through
+  Dart FFI. Eight concurrent isolate owners preserve all store updates, reject
+  symlinks, and preserve a newly staged candidate across another boot's health
+  acknowledgement.
+- Health is tied to a unique durable boot attempt, not merely a patch ID.
+  Delayed acknowledgements from another owner or the same loader's earlier
+  asynchronous load preserve the newer pending token/failure count. Regression
+  checks run in JIT, AOT, native FFI owners and the signed DBC3 loader; legacy
+  state migration retains incomplete-boot evidence and LKG.
+- Native ASan/UBSan tests cover concurrent read/replace, invalid path components,
+  symlinks/hardlinks/FIFO, bounded reads, failed partial writes and a killed lock
+  owner. The native helper compiles and links for Android/iOS/OHOS arm64; no
+  device or simulator was used.
+- Android Gradle/CMake packaging places the native store in the actual release
+  APK; exported FFI symbols and 16 KiB segment alignment are checked from that
+  APK. iOS arm64 final linkage retains all seven entries under dead stripping,
+  with name-based lookup independently exercised on the host. OHOS CMake
+  builds and exports the shared library; iOS app/HAR integration is pending.
+
 ## Integrated compiler and authenticated loader — 2026-09-09
 
 Reproduce with `DART_BIN=/path/to/dart sh run_compiled_dbc3.sh`, using the
@@ -36,8 +67,8 @@ the verification callback test the read boundary.
 
 The generated compiler still rejects unsupported language constructs and is a
 host frontend driver. Flutter Engine integration, the OHOS compiler/runtime
-build, platform durability/no-follow transaction primitives and trusted replay
-state remain incomplete. These checks do not establish three-platform support.
+build, platform execution/durability testing and trusted replay state remain
+incomplete. These checks do not establish three-platform support.
 
 ## Historical separate spikes — 2026-09-04
 

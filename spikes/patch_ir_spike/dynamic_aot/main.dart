@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -74,6 +75,45 @@ Future<void> main() async {
   }
   if (!loader.stage('manifest.json', 'modules/patch.dart.bytecode')) {
     throw StateError('valid patch could not be restaged');
+  }
+
+  // Two async loads of the same signed patch must retain distinct health
+  // capabilities, whether they share a loader or have independent owners.
+  for (final sameOwner in [false, true]) {
+    final overlapRoot = Directory('overlapping-loads-$sameOwner');
+    final first = SignedPatchLoader(
+      root: overlapRoot,
+      verifier: manifestVerifier,
+    );
+    final second = sameOwner
+        ? first
+        : SignedPatchLoader(root: overlapRoot, verifier: manifestVerifier);
+    if (!first.stage('manifest.json', 'modules/patch.dart.bytecode')) {
+      throw StateError('overlap fixture install failed');
+    }
+    final entered = Completer<void>();
+    final resume = Completer<void>();
+    final waiting = first.load((bytes) async {
+      entered.complete();
+      await resume.future;
+      return bytes.length;
+    }, restoreBaseline: () {});
+    await entered.future;
+    final newest = await second.load(
+      (bytes) async => bytes.length,
+      restoreBaseline: () {},
+    );
+    resume.complete();
+    final stale = await waiting;
+    if (newest == null || stale == null)
+      throw StateError('overlap load failed');
+    final state = File('${overlapRoot.path}/state.json');
+    final beforeLateAck = state.readAsStringSync();
+    if (first.markHealthy(stale) || state.readAsStringSync() != beforeLateAck) {
+      throw StateError('stale loaded result cleared newer pending/failures');
+    }
+    if (!second.markHealthy(newest))
+      throw StateError('newest boot health failed');
   }
 
   // Both local state and the stored manifest are untrusted after a restart.

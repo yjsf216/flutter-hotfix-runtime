@@ -6,10 +6,10 @@ Independent, self-hosted research and implementation of a signed Flutter Patch I
 
 | Area | Status | Evidence required to advance |
 |---|---|---|
-| Manifest/security contract | P-256 verification, exact release binding and restart reauthentication pass in AOT | platform file durability, trusted anti-replay and key operations |
+| Manifest/security contract | P-256, frozen release identity, native transaction/fsync/no-follow store pass in host AOT; Android APK bundles native store | complete Engine/iOS/HAR integration, platform fault tests, trusted anti-replay and key operations |
 | Android 3.41.9 baseline | host build verified | device validation is manual and not run by this task |
 | Android external `libapp.so` | research/benchmark only | not a store production backend |
-| Unified Patch IR Runtime | ordinary Dart → automatic Kernel patch points → signed DBC3/store → AOT passes | Flutter Engine integration, remaining language lowering and platform gates |
+| Unified Patch IR Runtime | frozen release → automatic signed DBC3 → native store → AOT passes; real Flutter Widget AOT/DBC3 artifacts generated | Flutter Engine loading/rendering, remaining language lowering and platform gates |
 | OHOS 3.27.5-ohos-1.0.5 | embedder path located | shared Runtime port after Android/iOS gates |
 | iOS | dynamic-enabled VM core cross-compiles | Flutter Engine link and runtime execution |
 
@@ -52,6 +52,23 @@ baseline identity, stages and reauthenticates the stored artifact, and activates
 the generated FunctionId table. Tests cover fields, closures, named/optional
 arguments, async, exceptions, nested AOT calls, withdrawal to baseline, forged
 manifests and compiler rejection of incompatible/unsupported input.
+
+The release and patch compiler phases are separate. A release folder stores
+`baseline.input.dill`, `baseline.aot.dill`, `baseline.id`, its interface and
+`release.json`; the patch phase needs those frozen files and updated source,
+and checks compiler/platform identity before emitting bytecode. The integrated
+test overwrites the source in place and removes the old application entry to
+prove it does not rebuild the installed baseline. It also exercises the bundled
+native file boundary described in [native/README.md](native/README.md).
+
+For real Flutter Framework/dart:ui compilation without launching a device:
+
+```sh
+sh spikes/patch_ir_spike/run_flutter_kernel.sh
+```
+
+This generates a real AOT snapshot and one DBC3 Widget patch in a fresh output
+directory. It does not claim Flutter Engine execution or rendering.
 
 The earlier JSON semantic oracle remains a separate check:
 

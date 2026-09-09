@@ -2,24 +2,31 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'patch_store.dart';
+import 'native_store_io.dart';
 import 'signed_manifest.dart';
 
 /// A completed load operation, not an automatically healthy/committed boot.
 final class LoadedPatch<T> {
-  LoadedPatch._(this._owner, this.patchId, this.value);
+  LoadedPatch._(this._owner, this._attempt, this.value);
 
   final SignedPatchLoader _owner;
-  final String patchId;
+  final PatchBootAttempt _attempt;
+  String get patchId => _attempt.patchId;
   final T value;
 }
 
 final class SignedPatchLoader {
-  SignedPatchLoader({required Directory root, required this.verifier}) {
-    store = PatchStore(root, verifyManifest: _verifyStored);
+  SignedPatchLoader({
+    required Directory root,
+    required this.verifier,
+    NativeStoreIo? nativeIo,
+  }) {
+    store = PatchStore(root, verifyManifest: _verifyStored, nativeIo: nativeIo);
   }
 
   final SignedManifestVerifier verifier;
   late final PatchStore store;
+  void close() => store.close();
 
   bool _verifyStored(String patchId, Uint8List envelope, Uint8List artifact) {
     final verified = verifier.verify(envelope);
@@ -33,11 +40,11 @@ final class SignedPatchLoader {
 
   bool stage(String manifestPath, String modulePath) {
     try {
-      final envelope = _readBounded(manifestPath, maxManifestBytes);
+      final envelope = _readSource(manifestPath, maxManifestBytes);
       if (envelope == null) return false;
       final manifest = verifier.verify(envelope);
       if (manifest == null || manifest.rolloutPercent != 100) return false;
-      final artifact = _readBounded(modulePath, manifest.artifactSize);
+      final artifact = _readSource(modulePath, manifest.artifactSize);
       return artifact != null &&
           store.install(
             manifest.patchId,
@@ -50,6 +57,10 @@ final class SignedPatchLoader {
     }
   }
 
+  Uint8List? _readSource(String path, int limit) => store.nativeIo == null
+      ? _readBounded(path, limit)
+      : store.nativeIo!.readSource(path, limit);
+
   /// The callback receives the exact bytes rehashed and reauthenticated by the
   /// store. It may load, validate and activate the module. A failed callback
   /// must undo dispatch changes through [restoreBaseline] before returning null.
@@ -59,13 +70,13 @@ final class SignedPatchLoader {
     required void Function() restoreBaseline,
   }) async {
     try {
-      final selected = store.beginBoot();
-      final bytes = selected == PatchStore.bundled
+      final attempt = store.beginBootAttempt();
+      final bytes = attempt == null
           ? null
-          : store.readVerified(selected);
-      if (bytes != null) {
+          : store.readVerified(attempt.patchId);
+      if (attempt != null && bytes != null) {
         final value = await loadAndValidate(bytes);
-        return LoadedPatch._(this, selected, value);
+        return LoadedPatch._(this, attempt, value);
       }
     } on Object {
       // Restore outside the catch: a broken rollback must never claim success.
@@ -77,7 +88,7 @@ final class SignedPatchLoader {
   /// Call after activation and the application's health checkpoint, not merely
   /// because a bytecode entrypoint returned. Foreign loader results are rejected.
   bool markHealthy<T>(LoadedPatch<T> patch) =>
-      identical(patch._owner, this) && store.markHealthy(patch.patchId);
+      identical(patch._owner, this) && store.markBootHealthy(patch._attempt);
 }
 
 Uint8List? _readBounded(String path, int limit) {

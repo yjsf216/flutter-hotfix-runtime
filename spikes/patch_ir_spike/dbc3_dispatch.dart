@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
 
 import 'package:dynamic_modules/dynamic_modules.dart';
@@ -7,6 +8,7 @@ import 'dynamic_aot/release_identity.dart' show releaseIdentity;
 import 'fixtures/patch_hook.dart' as hook;
 import 'signed_manifest.dart';
 import 'signed_patch_loader.dart';
+import 'native_store_io.dart';
 
 typedef PatchFunction = Object? Function(Object? receiver, List<Object?> args);
 
@@ -19,22 +21,37 @@ late SignedPatchLoader _loader;
 Future<LoadedPatch<void>?> bootSignedModule(List<String> paths) async {
   if (paths.length != 3)
     throw ArgumentError('module, manifest, store required');
-  _loader = SignedPatchLoader(
-    root: Directory(paths[2]),
-    verifier: SignedManifestVerifier(
-      baselineId: baselineBuildId,
-      releaseIdentity: releaseIdentity,
-      publicKeys: {
-        'spike-p256-1': base64.decode(
-          const String.fromEnvironment('HOTFIX_TEST_PUBLIC_KEY'),
-        ),
-      },
-    ),
-  );
-  _loader.stage(paths[1], paths[0]);
-  return _loader.load<void>((bytes) async {
-    activateModule(await loadModuleFromBytes(bytes));
-  }, restoreBaseline: deactivateModule);
+  try {
+    _loader = SignedPatchLoader(
+      root: Directory(paths[2]),
+      nativeIo: const bool.fromEnvironment('HOTFIX_NATIVE_STORE')
+          ? Platform.environment['HOTFIX_TEST_NATIVE_LIBRARY'] == null
+                ? NativeStoreIo.bundled(Directory(paths[2]))
+                : NativeStoreIo(
+                    Directory(paths[2]),
+                    DynamicLibrary.open(
+                      Platform.environment['HOTFIX_TEST_NATIVE_LIBRARY']!,
+                    ),
+                  )
+          : null,
+      verifier: SignedManifestVerifier(
+        baselineId: baselineBuildId,
+        releaseIdentity: releaseIdentity,
+        publicKeys: {
+          'spike-p256-1': base64.decode(
+            const String.fromEnvironment('HOTFIX_TEST_PUBLIC_KEY'),
+          ),
+        },
+      ),
+    );
+    _loader.stage(paths[1], paths[0]);
+    return await _loader.load<void>((bytes) async {
+      activateModule(await loadModuleFromBytes(bytes));
+    }, restoreBaseline: deactivateModule);
+  } on Object {
+    deactivateModule();
+    return null;
+  }
 }
 
 bool commitModuleHealth(LoadedPatch<void> patch) => _loader.markHealthy(patch);

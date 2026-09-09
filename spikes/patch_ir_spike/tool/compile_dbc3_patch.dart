@@ -4,12 +4,15 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:dart2bytecode/bytecode_generator.dart' show generateBytecode;
 import 'package:dart2bytecode/options.dart' show BytecodeOptions;
+import 'package:front_end/src/api_prototype/file_system.dart' as front_end_fs;
+import 'package:front_end/src/api_prototype/standard_file_system.dart';
 import 'package:front_end/src/api_unstable/vm.dart' show CompilerOptions;
 import 'package:kernel/class_hierarchy.dart';
 import 'package:kernel/clone.dart';
 import 'package:kernel/core_types.dart';
 import 'package:kernel/kernel.dart';
 import 'package:kernel/src/replacement_visitor.dart';
+import 'package:package_config/package_config.dart';
 import 'package:vm/kernel_front_end.dart';
 import 'package:vm/transformations/dynamic_interface_annotator.dart'
     show pragmaConstant;
@@ -17,81 +20,390 @@ import 'package:vm/transformations/dynamic_interface_annotator.dart'
 import 'build.dart' show functionSignature, logicalLibraryUri;
 import 'kernel_compare.dart';
 
-/// Host driver for the pinned frontend. All executable patch bodies come from
-/// cloned Kernel; business sources are never rewritten or manually registered.
-Future<void> main(List<String> arguments) async {
-  if (arguments.length < 4 || arguments.length > 5) {
+const _defaultRetained = {'dart:core', 'dart:async', 'dart:_internal'};
+
+/// Release and patch commands archive a baseline before any patch exists.
+/// The combined command remains available for the earlier fixture scripts.
+Future<void> main(List<String> args) async {
+  final spike = File.fromUri(Platform.script).parent.parent;
+  if (args.isNotEmpty &&
+      args.first == 'release' &&
+      (args.length == 4 || args.length == 5)) {
+    await compileBaseline(
+      sdk: Directory(args[1]).absolute,
+      baselineUri: File(args[2]).absolute.uri,
+      output: Directory(args[3]).absolute,
+      entryUri: args.length == 5
+          ? File(args[4]).absolute.uri
+          : spike.uri.resolve('fixtures/compiled_entry.dart'),
+    );
+    return;
+  }
+  if (args.isNotEmpty && args.first == 'patch' && args.length == 5) {
+    await compilePatch(
+      sdk: Directory(args[1]).absolute,
+      release: Directory(args[2]).absolute,
+      updatedUri: File(args[3]).absolute.uri,
+      output: Directory(args[4]).absolute,
+    );
+    return;
+  }
+  if (args.length < 4 || args.length > 5) {
     throw ArgumentError(
-      'usage: compile_dbc3_patch sdk-source baseline updated output [host-entry]',
+      'usage: release SDK BASELINE OUTPUT [ENTRY] | patch SDK RELEASE UPDATED OUTPUT | SDK BASELINE UPDATED OUTPUT [ENTRY]',
     );
   }
-  final sdk = Directory(arguments[0]).absolute;
-  final baselineUri = File(arguments[1]).absolute.uri;
-  final updatedUri = File(arguments[2]).absolute.uri;
-  final output = Directory(arguments[3]).absolute..createSync(recursive: true);
+  final output = Directory(args[3]).absolute;
+  await compileBaseline(
+    sdk: Directory(args[0]).absolute,
+    baselineUri: File(args[1]).absolute.uri,
+    output: output,
+    entryUri: args.length == 5
+        ? File(args[4]).absolute.uri
+        : spike.uri.resolve('fixtures/compiled_entry.dart'),
+  );
+  await compilePatch(
+    sdk: Directory(args[0]).absolute,
+    release: output,
+    updatedUri: File(args[2]).absolute.uri,
+    output: output,
+  );
+}
+
+ErrorDetector _errors() => ErrorDetector(
+  previousErrorHandler: (message) =>
+      stderr.writeln(message.plainTextFormatted.join('\n')),
+);
+
+Future<String> _digestFile(File file) async =>
+    (await sha256.bind(file.openRead()).first).toString();
+
+Future<Map<String, Object?>> _toolIdentity(Directory sdk, Uri platform) async {
   final spike = File.fromUri(Platform.script).parent.parent;
-  final hostUri = arguments.length == 5
-      ? File(arguments[4]).absolute.uri
-      : spike.uri.resolve('fixtures/compiled_entry.dart');
-  final target = createFrontEndTarget('vm', supportMirrors: false)!;
+  return {
+    'compilerSources': {
+      for (final name in [
+        'compile_dbc3_patch.dart',
+        'kernel_compare.dart',
+        'build.dart',
+      ])
+        name: await _digestFile(File('${spike.path}/tool/$name')),
+    },
+    'genSnapshotSha256': await _digestFile(
+      File('${sdk.path}/xcodebuild/ReleaseARM64/gen_snapshot_product'),
+    ),
+    'platformSha256': await _digestFile(File.fromUri(platform)),
+    'snapshotKind': 'app-aot-elf',
+  };
+}
+
+void _checkPatchable(Library library) {
+  if (library.classes.any((klass) => klass.typeParameters.isNotEmpty)) {
+    throw const FormatException(
+      'generic class patch lowering is not implemented',
+    );
+  }
+  for (final procedure in _methods(library).values) {
+    if ({
+          AsyncMarker.SyncStar,
+          AsyncMarker.AsyncStar,
+        }.contains(procedure.function.dartAsyncMarker) ||
+        {
+          AsyncMarker.SyncStar,
+          AsyncMarker.AsyncStar,
+        }.contains(procedure.function.asyncMarker)) {
+      throw const FormatException(
+        'generator patch points require yield forwarding',
+      );
+    }
+    if (procedure.function.typeParameters.isNotEmpty ||
+        procedure.function.body == null) {
+      throw FormatException('unsupported patch signature: ${procedure.name}');
+    }
+  }
+}
+
+Future<void> compileBaseline({
+  required Directory sdk,
+  required Uri baselineUri,
+  required Uri entryUri,
+  required Directory output,
+  String targetName = 'vm',
+  Uri? platformDillUri,
+  Uri? packagesFileUri,
+  Set<Uri> retainedLibraries = const {},
+  Map<String, String> environmentDefines = const {},
+}) async {
+  if (File('${output.path}/release.json').existsSync()) {
+    throw const FormatException(
+      'release already frozen; choose a new release directory',
+    );
+  }
+  output.createSync(recursive: true);
+  final spike = File.fromUri(Platform.script).parent.parent;
+  final target = createFrontEndTarget(targetName, supportMirrors: false)!;
   final defines = <String, String>{
     'dart.vm.product': 'true',
     'dart.vm.profile': 'false',
     'HOTFIX_TEST_PUBLIC_KEY':
         Platform.environment['HOTFIX_TEST_PUBLIC_KEY'] ?? '',
+    'HOTFIX_NATIVE_STORE':
+        Platform.environment['HOTFIX_NATIVE_STORE'] ?? 'false',
+    ...environmentDefines,
   };
-  final errors = ErrorDetector(
-    previousErrorHandler: (message) =>
-        stderr.writeln(message.plainTextFormatted.join('\n')),
-  );
+  retainedLibraries = {
+    ..._defaultRetained.map(Uri.parse),
+    ...retainedLibraries,
+  };
+  final errors = _errors();
   final options = CompilerOptions()
-    ..sdkSummary = sdk.uri.resolve('xcodebuild/ReleaseARM64/vm_platform.dill')
-    ..packagesFileUri = spike.uri.resolve('.dart_tool/package_config.json')
+    ..sdkSummary =
+        platformDillUri ??
+        sdk.uri.resolve('xcodebuild/ReleaseARM64/vm_platform.dill')
+    ..packagesFileUri =
+        packagesFileUri ?? spike.uri.resolve('.dart_tool/package_config.json')
     ..target = target
     ..onDiagnostic = errors.call;
   final result = await compileToKernel(
     KernelCompilationArguments(
-      source: hostUri,
+      source: entryUri,
       options: options,
       includePlatform: true,
       enableAsserts: false,
       environmentDefines: Map.of(defines),
     ),
   );
-  final hostComponent = result.component;
-  if (hostComponent == null || errors.hasCompilationErrors)
+  final component = result.component;
+  if (component == null || errors.hasCompilationErrors)
     throw StateError('frontend failed');
+  final baseline = component.libraries.singleWhere(
+    (lib) => lib.fileUri == baselineUri,
+  );
+  _checkPatchable(baseline);
+  final core = CoreTypes(component);
+  final previous = _methods(baseline);
+  final ids = {
+    for (final entry in previous.entries)
+      entry.value: _id(Uri.parse(logicalLibraryUri), entry.key, entry.value),
+  };
   final baseInput = '${output.path}/baseline.input.dill';
-  await writeComponentToBinary(hostComponent, baseInput);
-  final patchOptions = CompilerOptions()
-    ..sdkSummary = options.sdkSummary
-    ..packagesFileUri = options.packagesFileUri
-    ..additionalDills = [File(baseInput).uri]
-    ..target = target
-    ..onDiagnostic = errors.call;
-  final patchResult = await compileToKernel(
+  await writeComponentToBinary(component, baseInput);
+  final buildRecipe = <String, Object?>{
+    ...await _toolIdentity(sdk, options.sdkSummary!),
+    'baselineKernelSha256': await _digestFile(File(baseInput)),
+    'logicalLibraryUri': logicalLibraryUri,
+    'baselineLibraryUri': baseline.importUri.toString(),
+    'entryUri': entryUri.toString(),
+    'targetName': targetName,
+    'retainedLibraries': retainedLibraries.map((uri) => uri.toString()).toList()
+      ..sort(),
+    'environmentDefines': defines,
+  };
+  final buildId = sha256
+      .convert(utf8.encode(jsonEncode(buildRecipe)))
+      .toString();
+  final hooks = component.libraries.singleWhere(
+    (lib) => lib.fileUri.path.endsWith('/patch_hook.dart'),
+  );
+  final hasPatch = hooks.procedures.singleWhere(
+    (p) => p.name.text == 'hotfixHasPatch',
+  );
+  final invoke = hooks.procedures.singleWhere(
+    (p) => p.name.text == 'hotfixInvoke',
+  );
+  for (final p in previous.values) {
+    final original = p.function.body!;
+    final patchCall = StaticInvocation(
+      invoke,
+      Arguments([
+        StringLiteral(ids[p]!),
+        p.isStatic ? NullLiteral() : ThisExpression(),
+        ListLiteral([
+          for (final parameter in [
+            ...p.function.positionalParameters,
+            ...p.function.namedParameters,
+          ])
+            VariableGet(parameter),
+        ], typeArgument: core.objectNullableRawType),
+      ]),
+    );
+    final patchedReturn = p.function.returnType is VoidType
+        ? Block([ExpressionStatement(patchCall), ReturnStatement()])
+        : ReturnStatement(AsExpression(patchCall, p.function.returnType));
+    p.function.body = Block([
+      IfStatement(
+        StaticInvocation(hasPatch, Arguments([StringLiteral(ids[p]!)])),
+        patchedReturn,
+        null,
+      ),
+      original,
+    ])..parent = p.function;
+    p.addAnnotation(
+      ConstantExpression(pragmaConstant(core, 'vm:never-inline')),
+    );
+  }
+  final runtime = component.libraries.singleWhere(
+    (lib) => lib.fileUri.path.endsWith('/dbc3_dispatch.dart'),
+  );
+  final idField = runtime.fields.singleWhere(
+    (f) => f.name.text == 'baselinePatchIds',
+  );
+  idField.initializer = StringLiteral(ids.values.join(','))..parent = idField;
+  final buildField = runtime.fields.singleWhere(
+    (f) => f.name.text == 'baselineBuildId',
+  );
+  buildField.initializer = StringLiteral(buildId)..parent = buildField;
+  File('${output.path}/baseline.id').writeAsStringSync(buildId);
+  final spec = File('${output.path}/dynamic_interface.yaml')
+    ..writeAsStringSync(
+      jsonEncode({
+        'callable': [
+          for (final uri in retainedLibraries) {'library': uri.toString()},
+          {'library': baseline.importUri.toString()},
+          // Library-wide annotation skips private declarations. Retain them
+          // explicitly so a future patch can call a previously unused member.
+          for (final klass in baseline.classes) ...[
+            {'library': baseline.importUri.toString(), 'class': klass.name},
+            for (final member in [
+              ...klass.constructors,
+              ...klass.procedures,
+              ...klass.fields,
+            ])
+              {
+                'library': baseline.importUri.toString(),
+                'class': klass.name,
+                'member': member.name.text,
+              },
+          ],
+          for (final member in [...baseline.procedures, ...baseline.fields])
+            {
+              'library': baseline.importUri.toString(),
+              'member': member.name.text,
+            },
+        ],
+      }),
+    );
+  await runGlobalTransformations(
+    target,
+    component,
+    errors,
     KernelCompilationArguments(
-      source: updatedUri,
-      options: patchOptions,
-      requireMain: false,
+      source: entryUri,
+      options: options,
+      aot: true,
       includePlatform: true,
+      useGlobalTypeFlowAnalysis: true,
+      dynamicInterface: spec.uri,
       enableAsserts: false,
       environmentDefines: Map.of(defines),
     ),
   );
-  var component = patchResult.component;
+  if (errors.hasCompilationErrors) throw StateError('AOT transform failed');
+  await writeComponentToBinary(component, '${output.path}/baseline.aot.dill');
+
+  // Written last: consumers only accept a complete frozen release.
+  File('${output.path}/release.json').writeAsStringSync(
+    jsonEncode({
+      'schemaVersion': 1,
+      'baselineId': buildId,
+      'buildRecipe': buildRecipe,
+      'aotKernelSha256': await _digestFile(
+        File('${output.path}/baseline.aot.dill'),
+      ),
+      'baselineFunctions': ids.values.toList(),
+    }),
+  );
+  print(
+    'PASS: frozen baseline $buildId with ${ids.length} automatic patch points',
+  );
+}
+
+Future<void> compilePatch({
+  required Directory sdk,
+  required Directory release,
+  required Uri updatedUri,
+  required Directory output,
+  Uri? platformDillUri,
+  Uri? packagesFileUri,
+}) async {
+  final spike = File.fromUri(Platform.script).parent.parent;
+  final frozen =
+      jsonDecode(File('${release.path}/release.json').readAsStringSync())
+          as Map<String, dynamic>;
+  if (frozen['schemaVersion'] != 1)
+    throw const FormatException('unknown frozen release format');
+  final recipe = frozen['buildRecipe'] as Map<String, dynamic>;
+  final buildId = frozen['baselineId'] as String;
+  final baseInput = File('${release.path}/baseline.input.dill');
+  final platform =
+      platformDillUri ??
+      sdk.uri.resolve('xcodebuild/ReleaseARM64/vm_platform.dill');
+  if (sha256.convert(utf8.encode(jsonEncode(recipe))).toString() != buildId ||
+      File('${release.path}/baseline.id').readAsStringSync() != buildId ||
+      await _digestFile(baseInput) != recipe['baselineKernelSha256']) {
+    throw const FormatException('frozen baseline identity mismatch');
+  }
+  final toolIdentity = await _toolIdentity(sdk, platform);
+  for (final key in toolIdentity.keys) {
+    if (jsonEncode(toolIdentity[key]) != jsonEncode(recipe[key])) {
+      throw FormatException('frozen compiler/toolchain mismatch: $key');
+    }
+  }
+  final candidateFile = File.fromUri(updatedUri);
+  final baselineUri = Uri.parse(recipe['baselineLibraryUri'] as String);
+  // Give only this entry a new identity. Keeping its original scheme/directory
+  // lets CFE resolve relative imports back to the frozen file:/package: libraries.
+  final sourceUri = baselineUri.resolve(
+    '.hotfix_candidate_${sha256.convert(candidateFile.readAsBytesSync())}.dart',
+  );
+  final packages =
+      packagesFileUri ?? spike.uri.resolve('.dart_tool/package_config.json');
+  final sourceFileUri = sourceUri.isScheme('package')
+      ? (await loadPackageConfigUri(packages)).resolve(sourceUri)!
+      : sourceUri;
+  updatedUri = sourceUri;
+  final target = createFrontEndTarget(
+    recipe['targetName'] as String,
+    supportMirrors: false,
+  )!;
+  final errors = _errors();
+  final options = CompilerOptions()
+    ..sdkSummary = platform
+    ..packagesFileUri = packages
+    ..fileSystem = _CandidateFileSystem(sourceFileUri, candidateFile.uri)
+    ..additionalDills = [baseInput.absolute.uri]
+    ..target = target
+    ..onDiagnostic = errors.call;
+  final result = await compileToKernel(
+    KernelCompilationArguments(
+      source: sourceUri,
+      options: options,
+      requireMain: false,
+      includePlatform: true,
+      enableAsserts: false,
+      environmentDefines: Map<String, String>.from(
+        recipe['environmentDefines'] as Map,
+      ),
+    ),
+  );
+  final component = result.component;
   if (component == null || errors.hasCompilationErrors)
     throw StateError('candidate frontend failed');
+  final retainedLibraries = (recipe['retainedLibraries'] as List)
+      .cast<String>()
+      .map(Uri.parse)
+      .toSet();
+  output.createSync(recursive: true);
   final baseline = component.libraries.singleWhere(
-    (lib) => lib.fileUri == baselineUri,
+    (lib) => lib.importUri == baselineUri,
   );
   final updated = component.libraries.singleWhere(
-    (lib) => lib.fileUri == updatedUri,
+    (lib) => lib.fileUri == sourceFileUri,
   );
-  var core = CoreTypes(component);
-  var previous = _methods(baseline);
+  final core = CoreTypes(component);
+  final previous = _methods(baseline);
   final next = _methods(updated);
-  var ids = {
+  final ids = {
     for (final e in previous.entries)
       e.value: _id(Uri.parse(logicalLibraryUri), e.key, e.value),
   };
@@ -148,7 +460,7 @@ Future<void> main(List<String> arguments) async {
   if (changed.isEmpty) throw const FormatException('no changed functions');
 
   final moduleUri = Uri.parse(
-    'hotfix:patch/${sha256.convert(File.fromUri(updatedUri).readAsBytesSync())}/module.dart',
+    'hotfix:patch/$buildId/${sha256.convert(candidateFile.readAsBytesSync())}/module.dart',
   );
   final module = Library(moduleUri, fileUri: updatedUri)..parent = component;
   final implementations = <Procedure, Procedure>{};
@@ -294,11 +606,7 @@ Future<void> main(List<String> arguments) async {
       module,
       baseline,
       ...component.libraries.where(
-        (lib) => {
-          'dart:core',
-          'dart:async',
-          'dart:_internal',
-        }.contains(lib.importUri.toString()),
+        (lib) => retainedLibraries.contains(lib.importUri),
       ),
     }),
   );
@@ -315,150 +623,10 @@ Future<void> main(List<String> arguments) async {
     options: BytecodeOptions(),
   );
   await sink.close();
-  // The baseline is emitted from its independent compilation. No candidate
-  // declarations, constants or bodies can become baseline AOT code.
-  component = hostComponent;
-  core = CoreTypes(component);
-  previous = _methods(
-    component.libraries.singleWhere((lib) => lib.fileUri == baselineUri),
-  );
-  ids = {
-    for (final e in previous.entries)
-      e.value: _id(Uri.parse(logicalLibraryUri), e.key, e.value),
-  };
 
-  final hooks = component.libraries.singleWhere(
-    (lib) => lib.fileUri.path.endsWith('/patch_hook.dart'),
-  );
-  final hasPatch = hooks.procedures.singleWhere(
-    (p) => p.name.text == 'hotfixHasPatch',
-  );
-  final invoke = hooks.procedures.singleWhere(
-    (p) => p.name.text == 'hotfixInvoke',
-  );
-  for (final p in previous.values) {
-    final original = p.function.body!;
-    final patchCall = StaticInvocation(
-      invoke,
-      Arguments([
-        StringLiteral(ids[p]!),
-        p.isStatic ? NullLiteral() : ThisExpression(),
-        ListLiteral([
-          for (final parameter in [
-            ...p.function.positionalParameters,
-            ...p.function.namedParameters,
-          ])
-            VariableGet(parameter),
-        ], typeArgument: core.objectNullableRawType),
-      ]),
-    );
-    final patchedReturn = p.function.returnType is VoidType
-        ? Block([ExpressionStatement(patchCall), ReturnStatement()])
-        : ReturnStatement(AsExpression(patchCall, p.function.returnType));
-    p.function.body = Block([
-      IfStatement(
-        StaticInvocation(hasPatch, Arguments([StringLiteral(ids[p]!)])),
-        patchedReturn,
-        null,
-      ),
-      original,
-    ])..parent = p.function;
-    p.addAnnotation(
-      ConstantExpression(pragmaConstant(core, 'vm:never-inline')),
-    );
-  }
-  final runtime = component.libraries.singleWhere(
-    (lib) => lib.fileUri.path.endsWith('/dbc3_dispatch.dart'),
-  );
-  final idField = runtime.fields.singleWhere(
-    (f) => f.name.text == 'baselinePatchIds',
-  );
-  idField.initializer = StringLiteral(ids.values.join(','))..parent = idField;
-  final buildRecipe = <String, Object?>{
-    'baselineKernelSha256': sha256
-        .convert(File(baseInput).readAsBytesSync())
-        .toString(),
-    'compilerSources': {
-      for (final name in [
-        'compile_dbc3_patch.dart',
-        'kernel_compare.dart',
-        'build.dart',
-      ])
-        name: sha256
-            .convert(File('${spike.path}/tool/$name').readAsBytesSync())
-            .toString(),
-    },
-    'genSnapshotSha256':
-        (await sha256
-                .bind(
-                  File(
-                    '${sdk.path}/xcodebuild/ReleaseARM64/gen_snapshot_product',
-                  ).openRead(),
-                )
-                .first)
-            .toString(),
-    'snapshotKind': 'app-aot-elf',
-    'logicalLibraryUri': logicalLibraryUri,
-  };
-  final buildId = sha256
-      .convert(utf8.encode(jsonEncode(buildRecipe)))
-      .toString();
-  final buildField = runtime.fields.singleWhere(
-    (f) => f.name.text == 'baselineBuildId',
-  );
-  buildField.initializer = StringLiteral(buildId)..parent = buildField;
-  File('${output.path}/baseline.id').writeAsStringSync(buildId);
-  final spec = File('${output.path}/dynamic_interface.yaml')
-    ..writeAsStringSync(
-      jsonEncode({
-        'callable': [
-          {'library': 'dart:core'},
-          {'library': 'dart:async'},
-          {'library': baseline.importUri.toString()},
-          // Library-wide annotation skips private declarations. Retain them
-          // explicitly so a future patch can call a previously unused member.
-          for (final klass in baseline.classes) ...[
-            {'library': baseline.importUri.toString(), 'class': klass.name},
-            for (final member in [
-              ...klass.constructors,
-              ...klass.procedures,
-              ...klass.fields,
-            ])
-              {
-                'library': baseline.importUri.toString(),
-                'class': klass.name,
-                'member': member.name.text,
-              },
-          ],
-          for (final member in [...baseline.procedures, ...baseline.fields])
-            {
-              'library': baseline.importUri.toString(),
-              'member': member.name.text,
-            },
-        ],
-      }),
-    );
-  await runGlobalTransformations(
-    target,
-    component,
-    errors,
-    KernelCompilationArguments(
-      source: hostUri,
-      options: options,
-      aot: true,
-      includePlatform: true,
-      useGlobalTypeFlowAnalysis: true,
-      dynamicInterface: spec.uri,
-      enableAsserts: false,
-      environmentDefines: Map.of(defines),
-    ),
-  );
-  if (errors.hasCompilationErrors) throw StateError('AOT transform failed');
-  await writeComponentToBinary(component, '${output.path}/baseline.aot.dill');
   File('${output.path}/metadata.json').writeAsStringSync(
     jsonEncode({
       'baselineId': buildId,
-      'buildRecipe': buildRecipe,
       'baselineFunctions': ids.values.toList(),
       'changed': [
         for (final p in changed.where((p) => previous.containsKey(_key(p))))
@@ -469,11 +637,24 @@ Future<void> main(List<String> arguments) async {
           _key(p),
       ],
       'moduleLibraries': [moduleUri.toString()],
+      'artifactSha256': await _digestFile(
+        File('${output.path}/patch.bytecode'),
+      ),
     }),
   );
   print(
-    'PASS: compiled ${exports.length} changed functions and ${implementations.length - exports.length} private helpers to DBC3',
+    'PASS: compiled ${exports.length} changed functions and ${implementations.length - exports.length} private helpers from frozen baseline',
   );
+}
+
+class _CandidateFileSystem implements front_end_fs.FileSystem {
+  final Uri alias;
+  final Uri source;
+  _CandidateFileSystem(this.alias, this.source);
+
+  @override
+  front_end_fs.FileSystemEntity entityForUri(Uri uri) =>
+      StandardFileSystem.instance.entityForUri(uri == alias ? source : uri);
 }
 
 String _key(Procedure p) =>

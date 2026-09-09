@@ -25,6 +25,9 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 ## M2 — Dart frontend and AOT patch points (host entry transform passed)
 
 - Integrate the Kernel transform into the frontend pipeline. **Host driver passed:** `compileToKernel` → exact AST diff/clone → DBC3 plus patch points → `runGlobalTransformations` → AOT; Flutter's shipping frontend remains to be connected.
+- **Release/patch split passed:** release freezes input Kernel, AOT Kernel, identity and interface policy; patch validates and imports those artifacts without recompiling the baseline, including after in-place source replacement and removal of the old entry point.
+- **Relative dependency gate passed:** file/package candidate aliases retain same-directory and parent-relative imports; AOT execution proves frozen dependencies are reused after their disk sources change. URI-based `part of` libraries still need identity handling.
+- **Real Flutter artifact gate passed:** `target=flutter` with the installed product `dart:ui` platform compiles a changed `StatelessWidget.build` into one DBC3 module, retains Framework in a real AOT snapshot and leaves frozen release files unchanged. Engine rendering/loading remains unverified.
 - Build the pinned host VM with `dart_dynamic_modules=true` and execute generated DBC3. **Passed:** upstream `core_api` AOT dynamic-module test.
 - Map FunctionId patch points to interpreted closures and installed AOT entries. **Host bridge passed:** `AOT -> DBC3 closure -> AOT`, including transactional rejection.
 - Run the complete upstream dynamic-module AOT semantic suite. **Passed:** 38/38, zero failure logs.
@@ -43,6 +46,8 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 
 - Embed the shared Runtime in Flutter 3.41.9 Android.
 - Add signing, atomic install, startup state, last-known-good, blacklist and withdrawal.
+- **Native file boundary passed on host:** bundled C `openat/O_NOFOLLOW`, descriptor reads, file/directory fsync, renameat and directory-inode transactions are connected to the signed Dart loader. C libraries cross-compile/link for Android/iOS/OHOS arm64; app/Engine packaging and platform power-loss tests remain.
+- **Native packaging gate partially passed:** Android Gradle/CMake release APK contains the arm64 store and seven FFI exports with 16 KiB segment alignment. Apple CMake consumers retain those exports under dead stripping; an iOS arm64 executable cross-links, and OHOS CMake produces the shared library. Full iOS/Flutter HAR packaging and target execution remain unverified.
 - Run compatibility, performance, crash rollback and Google Play policy gates.
 
 **Accept:** host integration tests plus an independently authorized Android device matrix pass baseline, valid patch, corrupt patch, mismatch and crash rollback scenarios.

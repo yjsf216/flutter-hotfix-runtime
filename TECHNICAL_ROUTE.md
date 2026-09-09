@@ -23,7 +23,7 @@
 
 AOT linker 只把函数 ID 映射到安装包内已有 AOT entry，不加载补丁机器码。外部 `libapp.so` 仅保留为 Android/OHOS 加载链路研究和性能基准，不是商店生产后端。
 
-## 第一版语言边界
+## 第一版目标语言边界（并非全部已实现）
 
 允许：
 
@@ -38,6 +38,8 @@ AOT linker 只把函数 ID 映射到安装包内已有 AOT entry，不加载补�
 - 跨 Flutter、Dart、Engine revision 或构建参数使用补丁。
 
 可更新业务 package 禁止跨函数内联，调用经 dispatch table；Flutter Framework、Dart SDK 和固定依赖保持普通 AOT 优化。新增类第一版只能在 Patch IR 内创建、持有和调用，不暴露给 baseline AOT，也不参与 native/FFI ABI。
+
+当前自动编译链已验证同布局字段、闭包、命名/可选参数、async、异常和既有 AOT 调用；构造逻辑更新、新类、泛型、generator、dynamic 与 lexical `super` 的补丁支持仍待实现，当前明确拒绝，不视为完成。
 
 ## 共用安全与发布平面
 
@@ -69,6 +71,8 @@ BUNDLED -> VERIFIED -> STAGED -> PENDING_BOOT -> HEALTHY -> LAST_KNOWN_GOOD
 
 当前 JSON opcode 仅保留为独立语义 oracle。2026-09-09 已打通普通 Dart → Kernel AST 比较与 clone → 自动 AOT patch points + DBC3 → OpenSSL P-256 签名 → 启动重验与执行。Runtime 使用包内公钥验证全部身份字段和实际产物摘要，baselineId 绑定独立 baseline Kernel、编译器变换源码与 AOT 编译器二进制。上游 dynamic-interface 标注保留 baseline 能力，编译边界拒绝未保留的引用。
 
+发布与补丁编译已分离：发布时冻结原始 Kernel、AOT Kernel、接口约束和 release descriptor；以后仅凭冻结文件和更新源码生成 DBC3，不重编译已安装基线。测试覆盖覆盖原源码、移走旧入口后仍能产出有效补丁。真实 Flutter `StatelessWidget.build` 已通过 `target=flutter`、product `dart:ui` 的 AOT/DBC3 产物门，但尚未在 Flutter Engine 内加载或渲染。
+
 ### AOT linker/bridge
 
 - DBC3 模块入口返回 `FunctionId -> interpreted closure` 表；Runtime 全量校验后一次性激活，不直接依赖 VM 私有 Function 查找 API；
@@ -90,6 +94,8 @@ Dynamic module 声明在 isolate group 内只加载一次，而 dispatch 表是 
 | OHOS | 同一 Patch IR/compiler/linker/runtime | ArkTS/N-API embedder、sandbox 与 linker namespace | 华为/OpenHarmony 市场规则单独审核 |
 
 Android 是低成本研发平台：先验证 IR、dispatch、AOT bridge、GC 和异常语义，再移植同一核心到 iOS；OHOS 最后只做平台接入和完整回归，不另造执行模型。
+
+共用 C 存储层已接入签名加载器，使用 `openat/O_NOFOLLOW`、有界单描述符读取、文件/目录 fsync、原子 rename 和目录 inode 锁。Android APK 已实际包含存储库并通过导出符号/16 KiB 段对齐检查；iOS 静态链接保留 FFI 入口、OHOS CMake 共享库也已验证。它们是安装包内原生代码，不是下发补丁；完整 iOS App/OHOS HAR 和三端 Engine 执行门仍未完成。
 
 Flutter 3.41.9 Engine 已原生提供 `tools/gn --dart-dynamic-modules`，并包含 Android arm64/x64 与 iOS 真机/模拟器的 DDM release/debug CI 配置及 `-ddm` 打包规则；Android/iOS 不新增 GN 抽象，只沿用该实验构建通道。OHOS 锁定的 Dart 3.6.2 同样已含 DBC3/KBC，旧 Engine 可用现有 `--gn-args=dart_dynamic_modules=true` 透传；下一门是实际 arm64 HAR 构建。
 

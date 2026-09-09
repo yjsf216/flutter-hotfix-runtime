@@ -5,11 +5,24 @@ ordinary Dart → upstream Kernel comparison/clone → generated AOT patch point
 and DBC3 → OpenSSL P-256 signing → authenticated store/loader → interpreted
 functions calling retained baseline AOT → health commit and rollback.
 
+Release and patch are separate compiler phases: frozen input/AOT Kernel and
+identity are saved once; patches can be generated after replacing the original
+source and removing its entry point. The integrated check uses the bundled
+native transactional store, including cross-isolate contention.
+It also proves file/package relative imports reuse frozen AOT dependencies
+after both the business source and dependency sources change on disk.
+
+`sh run_flutter_kernel.sh` additionally compiles an ordinary Flutter
+`StatelessWidget.build` with the real product `dart:ui` platform into a retained
+baseline AOT snapshot and one DBC3 module. It checks frozen-release integrity;
+it does not launch a Flutter Engine or claim rendered output.
+
 It requires the pinned dynamic-enabled Dart source build under `work/upstream`.
 Compiler-side tools use that SDK's workspace package config. Business fixtures
 are ordinary Dart; Runtime setup belongs to the application entry point.
 Unsupported shapes are rejected, including changed layout/signature/defaults,
 generic methods/classes, generators, dynamic calls and lexical `super` calls.
+URI-based `part of` libraries remain unsupported by the candidate-entry alias.
 
 `DART_BIN=/path/to/dart sh run_dynamic_aot.sh` separately stresses the real
 signed loader with hand-written dispatch fixtures, GC, exceptions, async and

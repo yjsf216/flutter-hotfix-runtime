@@ -18,6 +18,34 @@ All are guarded by `DART_DYNAMIC_MODULES`. The GN argument `dart_dynamic_modules
 
 ## Host evidence
 
+### Frozen releases, real Flutter artifacts and native storage
+
+The compiler now exposes `compileBaseline` and `compilePatch` plus separate
+`release`/`patch` CLI commands. The release descriptor binds the input Kernel,
+compiler/AOT binary, platform digest, target, environment and retained interface.
+Patch compilation verifies this descriptor and does not emit replacement AOT.
+An in-place source update uses an independent entry alias in the original
+file/package directory so it cannot accidentally reuse the frozen old body.
+Relative imports keep their original dependency URIs. Tests remove the original
+entry, check every frozen artifact remains unchanged, and execute old dependency
+AOT values even after those dependency sources change on disk. URI-based
+`part of` libraries still require candidate-identity handling.
+
+The same phases accept `target=flutter` and the installed product platform dill.
+`run_flutter_kernel.sh` compiles real StatelessWidget/Text/dart:ui code, emits
+an AOT snapshot, and decodes a DBC3 module containing only the generated changed
+Widget method. It checks Framework remains in the baseline. This is artifact
+evidence, not evidence that a Flutter Engine loaded/rendered the patch.
+
+The signed compiler/runtime test now uses a bundled POSIX C store through FFI,
+including root-inode transactions, no-follow opens, bounded same-descriptor
+reads and file/directory fsync around atomic rename. Native sanitizer and
+concurrency/failure tests pass, and the helper links for Android/iOS/OHOS arm64.
+The Android release APK contains the shared helper and its FFI exports. The
+shared CMake target retains Apple FFI entries under dead stripping and builds
+an OHOS shared library. Full platform Engine/iOS/HAR packaging/execution and
+real power-loss tests remain open.
+
 ### Integrated source-to-signed-patch compiler (2026-09-09)
 
 `spikes/patch_ir_spike/run_compiled_dbc3.sh` now joins the former separate
@@ -146,9 +174,9 @@ Upstream dynamic modules add new module declarations; they do not automatically 
 Required work:
 
 1. Build the Flutter-pinned Engine with `dart_dynamic_modules=true` for Android, iOS and OHOS; host execution and Android cross-compilation pass, while iOS has only passed core compilation.
-2. Expand the automatic DBC3 compiler's supported constructs and connect Flutter frontend builds; the old JSON opcode interpreter remains only a separate oracle.
+2. Expand the automatic DBC3 compiler's supported constructs and connect the verified Flutter artifact pipeline to shipping Engine builds; the old JSON opcode interpreter remains only a separate oracle.
 3. Extend the generated FunctionId tables to the remaining language corpus and deployed platform/isolate lifecycle; the host automatic path passes.
-4. Complete platform durability, native atomic no-follow file access and trusted replay protection around the now-real P-256 authenticated loader.
+4. Package the verified native file backend in platform apps/Engines, exercise platform durability and add trusted replay protection around the P-256 loader.
 5. Add a multi-hour platform soak before release; the upstream suite plus bounded host GC/exception/async/isolate churn gates pass.
 6. Vendor only exact pinned BSD-licensed upstream source changes and assume breaking changes on every Dart upgrade.
 

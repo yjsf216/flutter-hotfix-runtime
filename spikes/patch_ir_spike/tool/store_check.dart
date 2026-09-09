@@ -31,6 +31,66 @@ void main() {
     final digest1 = sha256.convert(p1).toString();
     final digest2 = sha256.convert(p2).toString();
     final digest3 = sha256.convert(p3).toString();
+    final attemptRoot = Directory('${root.path}/attempts');
+    final ownerA = PatchStore(attemptRoot);
+    final ownerB = PatchStore(attemptRoot);
+    check(ownerA.install('p1', p1, digest1));
+    final attemptA = ownerA.beginBootAttempt()!;
+    final attemptB = ownerB.beginBootAttempt()!;
+    final attemptState = File('${attemptRoot.path}/state.json');
+    var beforeStaleHealth = attemptState.readAsStringSync();
+    check(
+      !ownerA.markBootHealthy(attemptA),
+      'stale owner attempt acknowledged',
+    );
+    check(!ownerA.markHealthy('p1'), 'legacy API acknowledged a stale attempt');
+    check(!ownerB.markBootHealthy(attemptA), 'foreign attempt acknowledged');
+    check(
+      attemptState.readAsStringSync() == beforeStaleHealth,
+      'stale health changed the new pending/failure state',
+    );
+    check(ownerB.markBootHealthy(attemptB));
+    check(!ownerB.markBootHealthy(attemptB), 'attempt acknowledged twice');
+    final olderAttempt = ownerB.beginBootAttempt()!;
+    final newerAttempt = ownerB.beginBootAttempt()!;
+    beforeStaleHealth = attemptState.readAsStringSync();
+    check(
+      !ownerB.markBootHealthy(olderAttempt),
+      'same-owner stale result acknowledged',
+    );
+    check(attemptState.readAsStringSync() == beforeStaleHealth);
+    check(ownerB.markBootHealthy(newerAttempt));
+    final legacyState = jsonDecode(attemptState.readAsStringSync()) as Map
+      ..remove('pendingAttempt');
+    attemptState.writeAsStringSync(jsonEncode(legacyState));
+    final upgraded = PatchStore(attemptRoot);
+    check(
+      !upgraded.markHealthy('p1'),
+      'reopened owner inherited a health capability',
+    );
+    check(upgraded.beginBoot() == 'p1', 'legacy LKG was lost');
+    check(upgraded.markHealthy('p1'));
+    check(upgraded.beginBoot() == 'p1');
+    final legacyPending = jsonDecode(attemptState.readAsStringSync()) as Map
+      ..remove('pendingAttempt');
+    attemptState.writeAsStringSync(jsonEncode(legacyPending));
+    final restartedLegacy = PatchStore(attemptRoot);
+    check(restartedLegacy.beginBoot() == 'p1');
+    check(
+      (jsonDecode(attemptState.readAsStringSync()) as Map)['failures'] == 1,
+      'legacy migration cleared an incomplete boot',
+    );
+    check(!upgraded.markHealthy('p1'));
+    check(restartedLegacy.markHealthy('p1'));
+    final closedAttempt = restartedLegacy.beginBootAttempt()!;
+    final beforeClose = attemptState.readAsStringSync();
+    restartedLegacy.close();
+    check(
+      !restartedLegacy.markBootHealthy(closedAttempt),
+      'closed owner retained a boot capability',
+    );
+    check(!restartedLegacy.markHealthy('p1'));
+    check(attemptState.readAsStringSync() == beforeClose);
     for (final id in ['', '../escape', 'bundled', '.', 'a/b', 'p1\n']) {
       check(!store.install(id, p1, digest1), 'invalid install ID: $id');
       check(store.readVerified(id) == null, 'invalid read ID: $id');
@@ -116,6 +176,9 @@ void main() {
       {'active': 'uninstalled'},
       {'lastKnownGood': 'bundled'},
       {'pending': 42},
+      {'pendingAttempt': 42},
+      {'pending': 'p3', 'pendingAttempt': null},
+      {'pending': 'p3', 'pendingAttempt': 'malformed'},
       {'failures': -1},
       {'failures': 1},
       {
@@ -353,6 +416,9 @@ void main() {
     check(!PatchStore(oversizedOrphanRoot).install('p1', p1, digest1));
     check(oversizedOrphan.lengthSync() == PatchStore.maxArtifactBytes + 1);
 
+    print(
+      'PASS: boot-attempt ownership rejects late/same-owner acknowledgements and preserves legacy failure evidence',
+    );
     print(
       'PASS: immutable IDs, pending-specific failure counts, LKG and persistent blacklist',
     );

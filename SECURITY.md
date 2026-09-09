@@ -44,11 +44,28 @@ Store tests cover immutable IDs, preserved LKG, pending-boot failure accounting,
 blacklist, withdrawal, damaged state, symlinks, oversized sparse files, and
 returning the exact authenticated buffer even if disk changes during validation.
 Loader failures restore baseline dispatch and preserve pending failure evidence;
-only the owning loader can acknowledge a completed load as healthy.
+only the owning loader can acknowledge a completed load as healthy. Each boot
+persists a fresh 128-bit attempt token; health also requires the original local
+capability and an exact match with the current durable attempt. Delayed health
+from an earlier same-ID boot or another owner cannot erase a newer pending
+boot's failure evidence. Legacy state migration preserves that evidence.
 
-Still required: directory fsync for power loss, native atomic no-follow opens,
-multi-writer transaction locking, trusted anti-replay/downgrade state, partial
-rollout buckets, deployment/revocation operations and platform fault injection.
+The bundled native store now implements component-wise `openat/O_NOFOLLOW`,
+single-descriptor bounded reads, file and directory fsync, renameat and a
+directory-inode lock around the whole state transaction. It is connected to
+the P-256 loader via Dart FFI; both inbound files and stored files use native
+descriptor reads when enabled. Host sanitizer/fault/concurrency tests and
+Android/iOS/OHOS arm64 cross-linking pass. The original pure Dart backend stays
+available only as the earlier test oracle and does not provide these primitives.
+
+The Android spike release APK now bundles the native store with all seven FFI
+exports. Shared CMake Apple linkage keeps those exports under dead stripping;
+an iOS arm64 executable is cross-linked but not run. OHOS CMake exports pass,
+but the shared library is not yet packaged into a Flutter HAR.
+
+Still required: complete Engine/iOS app/OHOS HAR integration and runtime checks,
+platform power-loss and filesystem fault injection, trusted anti-replay/downgrade
+state, partial rollout buckets and deployment/revocation operations.
 Local expiry alone is not trusted anti-replay. Current rollout accepts only
 100 percent. Host tests do not establish these remaining properties.
 
