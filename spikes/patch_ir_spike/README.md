@@ -21,7 +21,12 @@ It requires the pinned dynamic-enabled Dart source build under `work/upstream`.
 Compiler-side tools use that SDK's workspace package config. Business fixtures
 are ordinary Dart; Runtime setup belongs to the application entry point.
 Unsupported shapes are rejected, including changed layout/signature/defaults,
-generic methods/classes, dynamic calls and lexical `super` calls.
+generic classes, dynamic calls and lexical `super` calls.
+Generic methods on non-generic classes and top-level generic functions preserve
+type arguments and bounds through typed Kernel calls. Their exports must pass
+per-FunctionId ABI checks generated into the baseline; accepting any callable
+`Function` is not sufficient. Checks cover dependent bounds, nullable values,
+named/optional parameters, generic generators and incompatible export rejection.
 Ordinary `sync*`/`async*` methods use generated `yield*` forwarding: checks cover
 lazy entry, independent iteration, nested AOT calls, exception/finally handling,
 early cancellation and withdrawal during an already-started generator.

@@ -49,7 +49,7 @@ PASS: ordinary Dart -> automatic patch points -> P-256 signed DBC3/store -> base
 PASS: forged generated patch manifest -> bundled baseline
 PASS: generated field/closure/named/optional/async/exception/nested-call patch + rollback
 PASS: incompatible source changes rejected before DBC3 emission
-PASS: CFE rejects generic-generator before bytecode emission
+PASS: CFE rejects generic-class before bytecode emission
 PASS: CFE rejects private-dynamic before bytecode emission
 PASS: CFE rejects private-symbol before bytecode emission
 PASS: CFE rejects super before bytecode emission
@@ -75,7 +75,20 @@ The real AOT generator check changes only two generator bodies while retaining
 five automatic patch points. It verifies delayed execution, repeat iteration,
 unchanged AOT helpers and `yield*` chains, exception/finally behavior, async early
 cancellation and withdrawal: started generators finish their selected body while
-later entries return to baseline. Generic generators remain explicitly rejected.
+later entries return to baseline.
+
+Generic method/top-level patches now export typed functions, with explicit
+Kernel type-argument invocation from the baseline. A generated per-FunctionId
+ABI predicate rejects wrong arity/bounds/named/optional/return shapes before
+dispatch replacement. Real AOT checks cover nullable arguments, two
+dependent type parameters, AOT callbacks, generic `sync*`/`Future<T>` and rollback;
+incompatible export shapes preserve the previously active table. Generic classes
+remain unsupported and changes to existing bounds/signatures fail compilation.
+
+The generic async case also preserves nullable `T` after `await`, the original
+exception object/stack from an AOT callback, and in-flight completion across
+withdrawal while subsequent calls return to baseline. Wrong Future return ABIs
+are rejected at activation and incompatible source return types at compilation.
 
 PatchStore now rejects ID overwrites and blacklisted reinstalls, preserves
 failure accounting and LKG, bounds all file reads and returns the exact buffer

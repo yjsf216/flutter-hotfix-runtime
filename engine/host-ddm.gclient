@@ -21,6 +21,9 @@ solutions = [{
     # These already exist as isolated copies from the identical c70f78e Dart
     # checkout. No gclient operation may update the original compiler workspace.
     "custom_deps": {
+        # GN's release flutter_engine dependency graph does not use SwiftShader;
+        # it belongs to the excluded host tester/examples, not this AOT gate.
+        "engine/src/flutter/third_party/swiftshader": None,
         "engine/src/flutter/third_party/dart": None,
         "engine/src/flutter/third_party/dart/third_party/binaryen/src": None,
         "engine/src/flutter/third_party/dart/third_party/devtools": None,

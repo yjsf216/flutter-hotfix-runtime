@@ -15,6 +15,7 @@ import 'package:kernel/clone.dart';
 import 'package:kernel/core_types.dart';
 import 'package:kernel/kernel.dart';
 import 'package:kernel/src/replacement_visitor.dart';
+import 'package:kernel/type_algebra.dart';
 import 'package:package_config/package_config.dart';
 import 'package:vm/kernel_front_end.dart';
 import 'package:vm/transformations/dynamic_interface_annotator.dart'
@@ -107,8 +108,7 @@ void _checkPatchable(Library library) {
     );
   }
   for (final procedure in _methods(library).values) {
-    if (procedure.function.typeParameters.isNotEmpty ||
-        procedure.function.body == null) {
+    if (procedure.function.body == null) {
       throw FormatException('unsupported patch signature: ${procedure.name}');
     }
     final function = procedure.function;
@@ -211,9 +211,12 @@ Future<void> compileBaseline({
   final invoke = hooks.procedures.singleWhere(
     (p) => p.name.text == 'hotfixInvoke',
   );
+  final lookup = hooks.procedures.singleWhere(
+    (p) => p.name.text == 'hotfixLookup',
+  );
   for (final p in previous.values) {
     final original = p.function.body!;
-    final patchCall = StaticInvocation(
+    Expression patchCall = StaticInvocation(
       invoke,
       Arguments([
         StringLiteral(ids[p]!),
@@ -227,6 +230,32 @@ Future<void> compileBaseline({
         ], typeArgument: core.objectNullableRawType),
       ]),
     );
+    if (p.function.typeParameters.isNotEmpty) {
+      final abi = _patchAbi(p, core);
+      final types = p.function.typeParameters
+          .map(TypeParameterType.withDefaultNullability)
+          .toList();
+      patchCall = FunctionInvocation(
+        FunctionAccessKind.FunctionType,
+        AsExpression(
+          StaticInvocation(lookup, Arguments([StringLiteral(ids[p]!)])),
+          abi,
+        ),
+        Arguments(
+          [
+            if (!p.isStatic) ThisExpression(),
+            for (final parameter in p.function.positionalParameters)
+              VariableGet(parameter),
+          ],
+          types: types,
+          named: [
+            for (final parameter in p.function.namedParameters)
+              NamedExpression(parameter.name!, VariableGet(parameter)),
+          ],
+        ),
+        functionType: FunctionTypeInstantiator.instantiate(abi, types),
+      );
+    }
     final generator = {
       AsyncMarker.SyncStar,
       AsyncMarker.AsyncStar,
@@ -265,6 +294,33 @@ Future<void> compileBaseline({
     (f) => f.name.text == 'baselineBuildId',
   );
   buildField.initializer = StringLiteral(buildId)..parent = buildField;
+  final validator = runtime.procedures.singleWhere(
+    (p) => p.name.text == 'hotfixValidatePatch',
+  );
+  final equality = core.objectClass.procedures.singleWhere(
+    (p) => p.name.text == '==',
+  );
+  validator.function.body = Block([
+    for (final p in previous.values)
+      IfStatement(
+        EqualsCall(
+          VariableGet(validator.function.positionalParameters[0]),
+          StringLiteral(ids[p]!),
+          functionType: equality.function.computeFunctionType(
+            Nullability.nonNullable,
+          ),
+          interfaceTarget: equality,
+        ),
+        ReturnStatement(
+          IsExpression(
+            VariableGet(validator.function.positionalParameters[1]),
+            _patchAbi(p, core),
+          ),
+        ),
+        null,
+      ),
+    ReturnStatement(BoolLiteral(false)),
+  ])..parent = validator.function;
   File('${output.path}/baseline.id').writeAsStringSync(buildId);
   final spec = File('${output.path}/dynamic_interface.yaml')
     ..writeAsStringSync(
@@ -547,6 +603,15 @@ Future<void> compilePatch({
   for (final e in implementations.entries) {
     final old = previous[_key(e.key)];
     if (old == null) continue; // New helpers remain private to this module.
+    if (e.key.function.typeParameters.isNotEmpty) {
+      exports.add(
+        MapLiteralEntry(
+          StringLiteral(ids[old]!),
+          ConstantExpression(StaticTearOffConstant(e.value)),
+        ),
+      );
+      continue;
+    }
     final receiver = VariableDeclaration(
       'receiver',
       type: core.objectNullableRawType,
@@ -696,6 +761,35 @@ class _CandidateFileSystem implements front_end_fs.FileSystem {
   @override
   front_end_fs.FileSystemEntity entityForUri(Uri uri) =>
       StandardFileSystem.instance.entityForUri(uri == alias ? source : uri);
+}
+
+FunctionType _patchAbi(Procedure procedure, CoreTypes core) {
+  if (procedure.function.typeParameters.isEmpty) {
+    return FunctionType(
+      [
+        core.objectNullableRawType,
+        InterfaceType(core.listClass, Nullability.nonNullable, [
+          core.objectNullableRawType,
+        ]),
+      ],
+      core.objectNullableRawType,
+      Nullability.nonNullable,
+    );
+  }
+  final type = procedure.function.computeFunctionType(Nullability.nonNullable);
+  return FunctionType(
+    [
+      if (!procedure.isStatic)
+        InterfaceType(procedure.enclosingClass!, Nullability.nonNullable),
+      ...type.positionalParameters,
+    ],
+    type.returnType,
+    Nullability.nonNullable,
+    typeParameters: type.typeParameters,
+    namedParameters: type.namedParameters,
+    requiredParameterCount:
+        type.requiredParameterCount + (procedure.isStatic ? 0 : 1),
+  );
 }
 
 String _key(Procedure p) =>

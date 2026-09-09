@@ -9,10 +9,10 @@ Future<void> main(List<String> args) async {
   try {
     final cases = [
       (
-        'generic-generator',
-        'class A { Iterable<T> f<T>(T value) sync* { yield value; } }',
-        'class A { Iterable<T> f<T>(T value) sync* { yield value; yield value; } }',
-        'unsupported patch signature',
+        'generic-class',
+        'class A<T> { T f(T value) => value; }',
+        'class A<T> { T f(T value) { return value; } }',
+        'generic class patch lowering is not implemented',
       ),
       (
         'generator-to-eager',

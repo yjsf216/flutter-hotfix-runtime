@@ -33,8 +33,9 @@ The Flutter and Dart checkouts use local shared Git object stores. Dart's
 already-resolved `third_party` and bootstrap SDK files were copied with macOS
 APFS clone-on-write (`cp -cR`), not mutable hard links, and excluded from gclient
 updates. These clones depend on the source Git object stores remaining available.
-Source dependency synchronization is in progress; Engine compilation and linking
-are **not yet verified**.
+Source synchronization for the selected host embedder target has completed.
+The matching Clang package is still being installed; native Engine compilation
+and linking are **not yet verified**.
 
 Five additional Engine dependencies were seeded from local Git objects with exact
 revision checks: BoringSSL, protobuf, libc++, libc++abi and LLVM libc. The existing
@@ -83,6 +84,27 @@ the latter directly depends on `libdart_jit`. The embedder instead uses
 The first GN preflight reached repository-version validation and correctly
 stopped at the not-yet-synced Skia source; it did not generate a complete build.
 
+Later preflights passed Skia/version validation and reached pending Vulkan
+headers. A critical upstream flag interaction was reproduced: in this pinned
+`tools/gn`, `--no-enable-unittests` overwrites `dart_dynamic_modules` with false.
+`configure_host_ddm.sh` avoids that flag and checks GN's effective DDM/release/CPU
+values after successful generation. The latest generation passed all three
+effective-value checks and produced 1,124 targets; the selected AOT library also
+defines `DART_DYNAMIC_MODULES`, `PRODUCT` and `DART_PRECOMPILED_RUNTIME`.
+A Ninja dry-run of the actual
+embedder target resolved 3,962 actions and its graph includes the AOT runtime,
+not the JIT runtime or SwiftShader. SwiftShader is therefore excluded only from
+this host-target dependency configuration. These are configuration/dependency
+checks, not evidence of native compilation or Engine execution.
+
+The copied Dart checkout's package config and SDK version have been generated,
+and the macOS SDK links prepared with `darwin_sdk.py --sdk macosx` only. To free
+build space, 7,937 old standalone Dart `.o`/`.a` files were removed from four
+object directories, preserving their `.ninja` rules and all final compiler,
+runtime, snapshot and evidence files. The three core binary SHA-256 values were
+unchanged, and the signed dynamic AOT/LKG regression passed afterward. These
+intermediate objects can be regenerated from the retained build configuration.
+
 The next proof is an actual release Engine with `dart_dynamic_modules=true`
 loading the repository's signed Widget DBC3 through Flutter, then target-specific
 Android/iOS/OHOS builds. Source preparation, archive probes and a standalone Dart
@@ -118,3 +140,13 @@ No Dart arguments select baseline; three arguments select a signed patch; an
 optional fourth `expect-baseline` argument supports a rejection case with a fresh
 store. Its CFE/AOT artifact compilation is checked, but this complete fixture
 has not yet been executed inside the new Engine.
+
+`sh engine/run_host_ddm.sh` wires this fixture to the real built embedder. It
+reuses the existing frozen-release compiler and offline signer, embeds a fresh
+test public key, and runs four separate processes against the same AOT snapshot:
+baseline, signed patch, forged signature, and a correctly signed manifest for a
+different baseline. Each process must produce a frame and pass the mounted Text
+assertion; the signed case must also commit native-store health. Logs and test
+artifacts stay under a unique ignored `work/engine-ddm-check.*` directory.
+Shell syntax and missing-Engine rejection have passed. The four positive/runtime
+cases remain unverified until the actual Engine build completes.

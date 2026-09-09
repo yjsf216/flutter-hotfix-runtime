@@ -15,8 +15,12 @@ typedef PatchFunction = Object? Function(Object? receiver, List<Object?> args);
 // Populated in Kernel before AOT compilation, independently of the candidate.
 String baselinePatchIds = '';
 String baselineBuildId = '';
-Map<String, PatchFunction> _active = const {};
+Map<String, Function> _active = const {};
 late SignedPatchLoader _loader;
+
+// Replaced in baseline Kernel with per-FunctionId ABI type checks. The default
+// rejects every export, including otherwise callable generic functions.
+bool hotfixValidatePatch(String functionId, Object? candidate) => false;
 
 Future<LoadedPatch<void>?> bootSignedModule(List<String> paths) async {
   if (paths.length != 3)
@@ -59,22 +63,26 @@ bool commitModuleHealth(LoadedPatch<void> patch) => _loader.markHealthy(patch);
 void activateModule(Object? result) {
   if (result is! Map) throw const FormatException('module table required');
   final allowed = baselinePatchIds.split(',').toSet();
-  final next = <String, PatchFunction>{};
+  final next = <String, Function>{};
   for (final entry in result.entries) {
     if (entry.key is! String ||
         !allowed.contains(entry.key) ||
-        entry.value is! PatchFunction) {
+        entry.value is! Function ||
+        !hotfixValidatePatch(entry.key as String, entry.value)) {
       throw const FormatException('module export does not match baseline');
     }
-    next[entry.key as String] = entry.value as PatchFunction;
+    next[entry.key as String] = entry.value as Function;
   }
   _active = Map.unmodifiable(next);
   hook.isPatched = _active.containsKey;
-  hook.dispatch = (id, receiver, args) => _active[id]!(receiver, args);
+  hook.dispatch = (id, receiver, args) =>
+      (_active[id]! as PatchFunction)(receiver, args);
+  hook.lookup = (id) => _active[id];
 }
 
 void deactivateModule() {
   _active = const {};
   hook.isPatched = null;
   hook.dispatch = null;
+  hook.lookup = null;
 }

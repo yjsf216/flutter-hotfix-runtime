@@ -39,7 +39,7 @@ AOT linker 只把函数 ID 映射到安装包内已有 AOT entry，不加载补�
 
 可更新业务 package 禁止跨函数内联，调用经 dispatch table；Flutter Framework、Dart SDK 和固定依赖保持普通 AOT 优化。新增类第一版只能在 Patch IR 内创建、持有和调用，不暴露给 baseline AOT，也不参与 native/FFI ABI。
 
-当前自动编译链已验证同布局字段、闭包、命名/可选参数、async、普通 `sync*`/`async*`、异常和既有 AOT 调用；generator 使用原生 `yield*` 保留惰性执行、取消与 finally 语义。构造逻辑更新、新类、泛型（含泛型 generator）、dynamic 与 lexical `super` 的补丁支持仍待实现，当前明确拒绝，不视为完成。
+当前自动编译链已验证同布局字段、闭包、命名/可选参数、async、`sync*`/`async*`、泛型函数与非泛型类上的泛型方法、异常和既有 AOT 调用。泛型补丁保留显式类型实参与约束，并由基线生成的函数签名检查后才激活；generator 使用原生 `yield*` 保留惰性执行、取消与 finally。构造逻辑更新、新类、泛型类、dynamic 与 lexical `super` 仍待实现，当前明确拒绝，不视为完成。
 
 ## 共用安全与发布平面
 
