@@ -15,10 +15,14 @@ cd "$engine_dir/engine/src"
 # In this pinned upstream script, --no-enable-unittests also sets
 # dart_dynamic_modules=false. Use the raw test GN argument instead, and inspect
 # the effective configuration before any native compilation is allowed.
+# This host harness uses the software surface. Disable its Metal shell/Impeller
+# backend only; iOS production configuration still requires the Metal toolchain.
 python3 flutter/tools/gn --runtime-mode=release --mac-cpu=arm64 --no-lto \
   --no-prebuilt-dart-sdk --no-full-dart-sdk --no-build-engine-artifacts \
+  --disable-desktop-embeddings \
   --dart-dynamic-modules --allow-deprecated-api-calls \
-  --target-dir=hotfix_host_release_arm64 --gn-args=enable_unittests=false
+  --target-dir=hotfix_host_release_arm64 \
+  --gn-args='enable_unittests=false shell_enable_metal=false impeller_enable_metal=false'
 
 check_arg() {
   value=$(flutter/third_party/gn/gn args out/hotfix_host_release_arm64 \
@@ -34,6 +38,10 @@ check_arg() {
 check_arg dart_dynamic_modules true
 check_arg flutter_runtime_mode '"release"'
 check_arg target_cpu '"arm64"'
+check_arg shell_enable_metal false
+check_arg impeller_enable_metal false
+check_arg embedder_enable_software true
+check_arg enable_desktop_embeddings false
 defines=$(flutter/third_party/gn/gn desc out/hotfix_host_release_arm64 \
   //flutter/third_party/dart/runtime:libdart_aotruntime defines)
 for definition in DART_DYNAMIC_MODULES PRODUCT DART_PRECOMPILED_RUNTIME; do

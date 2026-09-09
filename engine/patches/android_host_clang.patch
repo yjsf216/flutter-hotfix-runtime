@@ -1,0 +1,13 @@
+diff --git a/engine/src/build/toolchain/android/BUILD.gn b/engine/src/build/toolchain/android/BUILD.gn
+index 1fd53092ddb..cf490bd37f2 100644
+--- a/engine/src/build/toolchain/android/BUILD.gn
++++ b/engine/src/build/toolchain/android/BUILD.gn
+@@ -74,7 +74,7 @@ template("android_toolchain") {
+     if (host_os == "linux") {
+       host_dir = "linux-x64"
+     } else if (host_os == "mac") {
+-      host_dir = "mac-x64"
++      host_dir = "mac-$host_cpu"
+     } else {
+       assert(false, "Unknown host")
+     }

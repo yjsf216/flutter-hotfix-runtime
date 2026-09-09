@@ -71,6 +71,15 @@ All three plist callers now pass GN's actual host compiler path, respecting
 symlink is required. The host wrapper checks that this patch is present.
 The patched plist action has executed successfully in the actual Ninja build.
 
+That build later stopped at offline Metal shader compilation because the installed
+Xcode lacks the Metal Toolchain. The **host software-surface harness only** now
+disables `shell_enable_metal`, `impeller_enable_metal` and desktop application
+embeddings. GN checks still require AOT/DDM and `embedder_enable_software=true`;
+the actual selected command graph contains no offline Metal compilation. The
+real Engine build resumes with the existing objects and Skia software rendering.
+This does not validate Metal/GPU behavior or change either mobile configuration:
+the iOS production build still needs its Metal Toolchain.
+
 Use the already authorized HTTP/SOCKS proxy if Googlesource cannot be reached.
 The separate source pass avoids downloading every CIPD payload while disk space
 is constrained. Install only the pinned host Clang from `host-clang.ensure`;
@@ -188,3 +197,38 @@ effective values were `target_os="ios"`, `target_cpu="arm64"`,
 `DART_DYNAMIC_MODULES`. The two official iOS release targets resolve 6,563
 Ninja actions in dry-run mode. Native iOS compilation, linking, signing and
 runtime execution are **not yet verified**; this is not an iOS support claim.
+
+## Android arm64 cross-build preflight
+
+The native Android configuration requires NDK `28.2.13676358`, SDK platform 36
+and build-tools `36.1.0`. All three match installed components. Independent APFS
+clone-on-write copies are now under `engine/src/flutter/third_party/android_tools/sdk`
+(`ndk/28.2.13676358`, `platforms/android-36`, `build-tools/36.1.0`). The NDK copy
+came from the task's Dart checkout; the other two came from the installed Android
+SDK. No user SDK file is modified and no mutable hard links or directory symlinks
+point into it. This is a selected-component seed, not the full Android CIPD bundle.
+
+Apply `engine/patches/android_host_clang.patch` from the isolated Flutter checkout
+root. The Android GN toolchain also hardcoded `mac-x64`; the patch selects
+`mac-$host_cpu`, using the installed, pinned Engine Clang rather than the NDK's
+different compiler. From `engine/src`, with the environment exports above:
+
+```sh
+python3 flutter/tools/gn --android --android-cpu=arm64 --runtime-mode=release \
+  --no-lto --no-prebuilt-dart-sdk --no-full-dart-sdk --no-build-engine-artifacts \
+  --dart-dynamic-modules --allow-deprecated-api-calls \
+  --target-dir=hotfix_android_release_arm64 --gn-args=enable_unittests=false
+../../third_party/ninja/ninja -n -C out/hotfix_android_release_arm64 \
+  flutter/shell/platform/android:flutter_shell_native \
+  flutter/lib/snapshot:create_macos_gen_snapshot_arm64_arm64
+```
+
+Effective GN values confirm Android/arm64/release/DDM. The runtime defines include
+`DART_TARGET_OS_ANDROID`, `DART_COMPRESSED_POINTERS`, `DART_DYNAMIC_MODULES`,
+`PRODUCT` and `DART_PRECOMPILED_RUNTIME`. The selected targets resolve 5,603
+actions, producing `libflutter.so` and `artifacts_arm64/gen_snapshot_arm64`.
+A canary compile of `obj/flutter/fml/command_line.command_line.o` has executed
+successfully and produced an AArch64 ELF object. Full native linking, matching
+snapshot generation, APK integration and target execution are still unverified.
+Full Java/archive builds additionally need the pinned OpenJDK and Android
+embedding dependencies; the native preflight does not claim those are installed.
