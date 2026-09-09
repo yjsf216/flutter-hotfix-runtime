@@ -5,7 +5,9 @@ import '../../dbc3_dispatch.dart';
 import 'baseline.dart';
 
 Future<void> main(List<String> arguments) async {
-  WidgetsFlutterBinding.ensureInitialized();
+  final binding = WidgetsFlutterBinding.ensureInitialized();
+  // Do not let an empty frame during async patch loading satisfy startup health.
+  binding.deferFirstFrame();
   const result = BasicMessageChannel<String>(
     'hotfix/runtime-smoke',
     StringCodec(),
@@ -25,7 +27,7 @@ Future<void> main(List<String> arguments) async {
     }
     final key = GlobalKey();
     runApp(HotfixGreeting(key: key));
-    await WidgetsBinding.instance.endOfFrame;
+    await binding.endOfFrame;
     final context = key.currentContext;
     if (context == null) throw StateError('Widget was not mounted');
     String? text;
@@ -37,6 +39,16 @@ Future<void> main(List<String> arguments) async {
     });
     final expected = expectBaseline ? 'Flutter: baseline' : 'Flutter: patched';
     if (text != expected) throw StateError('mounted Text differs: $text');
+    if (binding.firstFrameRasterized) {
+      throw StateError('first frame escaped the startup gate');
+    }
+    // endOfFrame only completes the Framework phase. Release the validated
+    // Widget frame, then keep the boot pending until the Engine rasterizes it.
+    binding.allowFirstFrame();
+    await binding.waitUntilFirstFrameRasterized;
+    if (!binding.firstFrameRasterized) {
+      throw StateError('health checkpoint preceded first-frame rasterization');
+    }
     if (patch != null && !commitModuleHealth(patch)) {
       throw StateError('signed patch did not pass the health checkpoint');
     }

@@ -1,8 +1,8 @@
 # Isolated Flutter Engine DDM build
 
-This is an in-progress **host verification toolchain**, not a fourth supported
-application platform. Android, iOS and OHOS still need their own Engine builds
-and packaging. No device or simulator is used by this preparation.
+The **host Engine verification gate has passed**; this is not a fourth supported
+application platform. Android, iOS and OHOS still need their own Engine builds,
+packaging and execution gates. No device or simulator is used here.
 
 Pinned inputs:
 
@@ -36,8 +36,9 @@ updates. These clones depend on the source Git object stores remaining available
 Source synchronization for the selected host embedder target has completed.
 The matching Clang package is installed; `clang --version` reports revision
 `8c7a2ce01a77c96028fe2c8566f65c45ad9408d3`, and CIPD's installed receipt matches
-`host-clang.ensure`. Actual native compilation has started with `-j2`; the full
-Engine build, linking and execution are **not yet verified**.
+`host-clang.ensure`. The host release Engine compiled and linked with `-j2` and
+passed the four-process signed Widget/negative-input matrix. See
+[the execution evidence and exact fingerprints](EVIDENCE.md).
 
 Five additional Engine dependencies were seeded from local Git objects with exact
 revision checks: BoringSSL, protobuf, libc++, libc++abi and LLVM libc. The existing
@@ -76,7 +77,7 @@ Xcode lacks the Metal Toolchain. The **host software-surface harness only** now
 disables `shell_enable_metal`, `impeller_enable_metal` and desktop application
 embeddings. GN checks still require AOT/DDM and `embedder_enable_software=true`;
 the actual selected command graph contains no offline Metal compilation. The
-real Engine build resumes with the existing objects and Skia software rendering.
+real Engine build resumed successfully with existing objects and Skia software rendering.
 This does not validate Metal/GPU behavior or change either mobile configuration:
 the iOS production build still needs its Metal Toolchain.
 
@@ -107,7 +108,7 @@ Later preflights passed Skia/version validation and reached pending Vulkan
 headers. A critical upstream flag interaction was reproduced: in this pinned
 `tools/gn`, `--no-enable-unittests` overwrites `dart_dynamic_modules` with false.
 `configure_host_ddm.sh` avoids that flag and checks GN's effective DDM/release/CPU
-values after successful generation. The latest generation passed all three
+values after successful generation. The initial Metal-enabled generation passed all three
 effective-value checks and produced 1,124 targets; the selected AOT library also
 defines `DART_DYNAMIC_MODULES`, `PRODUCT` and `DART_PRECOMPILED_RUNTIME`.
 A Ninja dry-run of the actual
@@ -124,12 +125,11 @@ runtime, snapshot and evidence files. The three core binary SHA-256 values were
 unchanged, and the signed dynamic AOT/LKG regression passed afterward. These
 intermediate objects can be regenerated from the retained build configuration.
 
-The next proof is an actual release Engine with `dart_dynamic_modules=true`
-loading the repository's signed Widget DBC3 through Flutter, then target-specific
-Android/iOS/OHOS builds. Source preparation, archive probes and a standalone Dart
-VM must not be reported as that proof.
+The actual host release Engine has now loaded the signed Widget DBC3 through
+Flutter. The next gates are target-specific Android/iOS/OHOS builds and execution;
+neither this host gate nor a standalone Dart VM establishes those results.
 
-## Headless AOT harness (header gate passed, Engine execution pending)
+## Headless AOT harness (actual software Engine gate passed)
 
 `sh engine/check_headless_runner.sh` compiles `headless_aot_smoke.cc` against the
 pinned C API header, checks that no Engine function is statically linked, and
@@ -148,17 +148,18 @@ The runner requires `RunsAOTCompiledDartCode`, initializes AOT ELF data, provide
 platform task queue and a 320×240 software surface, and enforces bounded timeouts
 including native shutdown. Dart must send raw UTF-8 `PASS` (or `FAIL:<detail>`)
 on `hotfix/runtime-smoke`; a genuine surface callback must also occur before
-success. Frame FNV fingerprints are diagnostic, not cryptographic. The eventual
-Dart fixture must independently assert signed-patch semantics; a PASS message
+success. Frame FNV fingerprints are diagnostic, not cryptographic. The
+Dart fixture independently asserts signed-patch semantics; a PASS message
 and a frame alone do not prove that the expected widget was patched.
 
-The `flutter_compiled/main.dart` fixture is now wired to this protocol: after
-`endOfFrame` it inspects the mounted `Text` child, checks baseline versus patched
-content, and only then acknowledges signed-patch health and reports success.
+The `flutter_compiled/main.dart` fixture defers the first frame during patch
+bootstrap, then checks the mounted `Text` after `endOfFrame`. It releases that
+validated frame and waits for `waitUntilFirstFrameRasterized` before acknowledging
+signed-patch health, preventing an empty bootstrap frame or UI-only completion
+from satisfying the checkpoint.
 No Dart arguments select baseline; three arguments select a signed patch; an
 optional fourth `expect-baseline` argument supports a rejection case with a fresh
-store. Its CFE/AOT artifact compilation is checked, but this complete fixture
-has not yet been executed inside the new Engine.
+store. Both its CFE/AOT compilation and the four actual Engine runs have passed.
 
 `sh engine/run_host_ddm.sh` wires this fixture to the real built embedder. It
 reuses the existing frozen-release compiler and offline signer, embeds a fresh
@@ -167,8 +168,11 @@ baseline, signed patch, forged signature, and a correctly signed manifest for a
 different baseline. Each process must produce a frame and pass the mounted Text
 assertion; the signed case must also commit native-store health. Logs and test
 artifacts stay under a unique ignored `work/engine-ddm-check.*` directory.
-Shell syntax and missing-Engine rejection have passed. The four positive/runtime
-cases remain unverified until the actual Engine build completes.
+After all four runs, the script verifies durable state: the signed patch is active
+and last-known-good with no pending attempt; rejected patches have no active
+version, digest or persisted artifact. `engine-evidence.json` records these
+states, Engine/snapshot/patch SHA-256 values and all four logs, separately from the
+compiler-only `flutter-evidence.json` whose scope is artifact generation.
 
 ## iOS arm64 cross-build preflight
 

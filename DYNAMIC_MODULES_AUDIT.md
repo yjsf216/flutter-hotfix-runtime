@@ -76,7 +76,10 @@ Same-layout generic-class methods also retain reified class/method arguments,
 typed receivers, nullable fields and covariance checks before patch side effects.
 It rejects changed layout/signature/defaults, constructors and class bounds,
 dynamic private access and lexical super calls before bytecode emission. It
-does not yet implement all Dart constructs or Flutter widget/plugin integration.
+does not yet implement all Dart constructs or mobile Engine/plugin integration.
+The [real host AOT Engine gate](engine/EVIDENCE.md) has now executed a signed
+Widget replacement with mounted Text assertions, software frames and durable
+health checks; invalid inputs render baseline. This is not target-platform proof.
 
 The Flutter 3.41.9 SDK ships an AOT `dart2bytecode.dart.snapshot`. It successfully compiles the ordinary fixture into a 945-byte DBC3 format-version-1 module. The installed product AOT runtime then rejects loading with:
 

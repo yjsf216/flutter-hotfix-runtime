@@ -97,6 +97,8 @@ Android 是低成本研发平台：先验证 IR、dispatch、AOT bridge、GC 和
 
 共用 C 存储层已接入签名加载器，使用 `openat/O_NOFOLLOW`、有界单描述符读取、文件/目录 fsync、原子 rename 和目录 inode 锁。Android APK 已实际包含存储库并通过导出符号/16 KiB 段对齐检查；iOS 静态链接保留 FFI 入口、OHOS CMake 共享库也已验证。它们是安装包内原生代码，不是下发补丁；完整 iOS App/OHOS HAR 和三端 Engine 执行门仍未完成。
 
+真实 host AOT Flutter Engine 已成功加载签名 Widget DBC3：四个独立进程验证基线文本、补丁文本、伪造签名回退和版本不匹配回退，均产生软件渲染帧，并核对落盘健康状态。详见 [Engine 证据](engine/EVIDENCE.md)。这是共用执行链的实证，不是第四个产品平台，也不能替代 Android/iOS/OHOS 执行验证。
+
 Flutter 3.41.9 Engine 已原生提供 `tools/gn --dart-dynamic-modules`，并包含 Android arm64/x64 与 iOS 真机/模拟器的 DDM release/debug CI 配置及 `-ddm` 打包规则；Android/iOS 不新增 GN 抽象，只沿用该实验构建通道。OHOS 锁定的 Dart 3.6.2 同样已含 DBC3/KBC，旧 Engine 可用现有 `--gn-args=dart_dynamic_modules=true` 透传；下一门是实际 arm64 HAR 构建。
 
 ## 里程碑与停止门
@@ -104,7 +106,7 @@ Flutter 3.41.9 Engine 已原生提供 `tools/gn --dart-dynamic-modules`，并包
 1. **语义 spike（已通过）**：Dart CFE 把普通 fixture 编译为 Kernel；自动生成稳定 ID；单方法 diff；最小 IR；baseline/AOT 与 patch/interpreter dispatch；坏签名、baselineId、签名结构和 IR 均 fail-open。
 2. **Dart frontend 接入（host driver 已通过）**：`compileToKernel` 后使用上游 AST equivalence、clone 和 DBC3 codegen，插入 patch points 后运行 AOT 全局优化；继续接入 Flutter 实际 frontend 工具链。
 3. **AOT patch points**：业务 package 禁止跨函数内联并生成 dispatch table；性能损失超过预算则重新划定可更新 package，而不是全局关闭优化。
-4. **上游 dynamic modules（host VM 已通过）**：锁定 Dart 3.11.5 VM 以 `dart_dynamic_modules=true` 构建成功；上游 `core_api` 与仓库内 FunctionId 用例已验证 `AOT -> DBC3 closure -> AOT`；下一门是 Flutter Engine 与三平台构建。
+4. **上游 dynamic modules（host VM/Engine 已通过）**：锁定 Dart 3.11.5 VM 以 `dart_dynamic_modules=true` 构建成功；上游 `core_api`、FunctionId 用例及真实 host Engine 的签名 Widget 用例已验证共用执行链；下一门是三平台构建和执行。
 5. **VM 正确性**：复用并扩展上游字段、虚调用、闭包/泛型、async/异常、GC root、barrier、safepoint、isolate 测试；任何偶发内存错误都停止产品化。
 6. **Flutter 集成**：Widget、element/state、frame、plugin baseline API 回归。
 7. **Android 生产门**：灰度、撤回、崩溃回滚、审计、Play 政策评估。

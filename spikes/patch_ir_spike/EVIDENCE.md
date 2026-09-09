@@ -17,7 +17,9 @@
   identical bytecode and frozen release files are never rewritten.
 - A real Flutter target compiles a StatelessWidget/Text/dart:ui baseline to an
   AOT snapshot and one generated DBC3 module. Framework is retained only in the
-  baseline. Loading/rendering in a Flutter Engine is still unverified.
+  baseline. The [actual host Engine gate](../../engine/EVIDENCE.md) now also passes
+  signed patched Text rendering, forged-signature/baseline-mismatch fallback,
+  genuine software frames and durable healthy-state checks.
 - The signed generated-patch AOT test now uses bundled C file operations through
   Dart FFI. Eight concurrent isolate owners preserve all store updates, reject
   symlinks, and preserve a newly staged candidate across another boot's health
@@ -106,8 +108,8 @@ it authenticated. Sparse oversized files and a deterministic rewrite during
 the verification callback test the read boundary.
 
 The generated compiler still rejects unsupported language constructs and is a
-host frontend driver. Flutter Engine integration, the OHOS compiler/runtime
-build, platform execution/durability testing and trusted replay state remain
+host frontend driver. Mobile Flutter Engine integration, the OHOS compiler/runtime
+build, target execution/durability testing and trusted replay state remain
 incomplete. These checks do not establish three-platform support.
 
 ## Historical separate spikes — 2026-09-04

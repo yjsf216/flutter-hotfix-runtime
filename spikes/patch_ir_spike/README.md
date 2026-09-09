@@ -16,6 +16,9 @@ after both the business source and dependency sources change on disk.
 `StatelessWidget.build` with the real product `dart:ui` platform into a retained
 baseline AOT snapshot and one DBC3 module. It checks frozen-release integrity;
 it does not launch a Flutter Engine or claim rendered output.
+Separately, `sh engine/run_host_ddm.sh` from the repository root has passed the
+[actual AOT Engine software-frame gate](../../engine/EVIDENCE.md), including signed
+Widget replacement and negative-input fallback. Mobile execution remains pending.
 
 It requires the pinned dynamic-enabled Dart source build under `work/upstream`.
 Compiler-side tools use that SDK's workspace package config. Business fixtures
