@@ -5,7 +5,7 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 ## M0 — contract and reproducibility (now)
 
 - Pin Flutter 3.41.9 / Dart 3.11.5 / Engine `42d3d75a56` for Android and iOS research.
-- Pin Flutter OHOS 3.27.5-ohos-1.0.5 / Dart 3.6.2 / Engine `e672b006cb` for OHOS.
+- Pin Flutter OHOS 3.27.5-ohos-1.0.5 / Dart 3.6.2 / OHOS Engine `75252a6e5a748d29251ac16cd8d37a0e8f01729f` (`engine.ohos.version`, not the upstream Android/iOS engine.version).
 - Freeze manifest canonicalization, binding fields, offline-signing procedure, and evidence format.
 - Build/install the Android marker baseline.
 
@@ -24,13 +24,15 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 
 ## M2 — Dart frontend and AOT patch points (host entry transform passed)
 
-- Integrate the proven external Kernel transform into the upstream Dart frontend pipeline.
+- Integrate the Kernel transform into the frontend pipeline. **Host driver passed:** `compileToKernel` → exact AST diff/clone → DBC3 plus patch points → `runGlobalTransformations` → AOT; Flutter's shipping frontend remains to be connected.
 - Build the pinned host VM with `dart_dynamic_modules=true` and execute generated DBC3. **Passed:** upstream `core_api` AOT dynamic-module test.
 - Map FunctionId patch points to interpreted closures and installed AOT entries. **Host bridge passed:** `AOT -> DBC3 closure -> AOT`, including transactional rejection.
 - Run the complete upstream dynamic-module AOT semantic suite. **Passed:** 38/38, zero failure logs.
 - Cross-compile the dynamic-enabled standalone VM. **Android arm64 passed; iOS core objects passed but the non-Engine command-line target has an export-list link conflict.**
 - Reuse Flutter Engine's existing DDM GN/CI route. **Confirmed:** pinned 3.41.9 already defines Android and iOS DDM builders and archives; no new flag plumbing is needed.
 - Join verification/storage with the real loader. **Passed:** identity, length and digest gate → atomic store → pending boot → rehash → DBC3 activation → healthy commit; tampering stays baseline.
+- **Real authentication passed:** OpenSSL P-256 signatures verified inside AOT with embedded keys, complete release identity and independently compiled baseline fingerprint. Startup reauthenticates the stored manifest and the exact bytes returned to the loader; state+artifact+manifest forgery is rejected.
+- **Automatic compiler corpus passed:** same-layout fields, local closures, named/optional arguments, async, exceptions, retained nested AOT calls and rollback. Generics, generators, lexical `super`, dynamic calls, new classes and constructor updates still require implementation; unsupported inputs fail compilation.
 - Disable cross-function inlining only for updateable business packages.
 - Implement AOT↔interpreter bridges, then object/async/exception/GC/isolate gates. **Host GC, exception, async and 16-isolate bounded churn passed; multi-hour platform soak remains.**
 

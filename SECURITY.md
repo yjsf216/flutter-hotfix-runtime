@@ -30,11 +30,28 @@ Failure at any step is fail-open for app availability and fail-closed for the ca
 - Revocation and channel withdrawal are distinct: revocation distrusts a key/patch; withdrawal stops new assignment.
 - Never log keys, tokens, full device identifiers, or downloaded code bytes.
 
-## Threats explicitly tested
+## Verified host checks and remaining work
 
-Tampered payload/manifest, replay/downgrade, cross-app/cross-channel/cross-ABI substitution, path traversal, symlink/TOCTOU swap, partial write, zip bomb if archives are introduced, manifest ambiguity, unknown key, local state corruption, boot loop, rollback suppression, CDN equivocation, and telemetry spoofing.
+The current host Runtime verifies OpenSSL-produced ECDSA P-256/SHA-256 signatures
+using a pinned pure Dart PointyCastle implementation. The embedded key set,
+algorithm and every identity field are enforced; canonical JSON equality rejects
+duplicate keys and alternate encodings. Tests cover invalid/unknown/revoked
+keys, signed identity mismatches, expiry/schema/DER errors, artifact tampering,
+and combined artifact/state/manifest forgery after restart. Bounds are 16 KiB
+for manifests, 64 MiB for artifacts and 1 MiB for store state.
+
+Store tests cover immutable IDs, preserved LKG, pending-boot failure accounting,
+blacklist, withdrawal, damaged state, symlinks, oversized sparse files, and
+returning the exact authenticated buffer even if disk changes during validation.
+Loader failures restore baseline dispatch and preserve pending failure evidence;
+only the owning loader can acknowledge a completed load as healthy.
+
+Still required: directory fsync for power loss, native atomic no-follow opens,
+multi-writer transaction locking, trusted anti-replay/downgrade state, partial
+rollout buckets, deployment/revocation operations and platform fault injection.
+Local expiry alone is not trusted anti-replay. Current rollout accepts only
+100 percent. Host tests do not establish these remaining properties.
 
 ## Reporting
 
 Do not publish exploit details or keys in an issue. Until a private address is established, report only that a security contact is needed and retain the evidence offline. A dedicated policy and response SLA must exist before any production claim.
-

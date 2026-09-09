@@ -18,6 +18,29 @@ All are guarded by `DART_DYNAMIC_MODULES`. The GN argument `dart_dynamic_modules
 
 ## Host evidence
 
+### Integrated source-to-signed-patch compiler (2026-09-09)
+
+`spikes/patch_ir_spike/run_compiled_dbc3.sh` now joins the former separate
+automatic-Kernel and hand-written-DBC3 proofs. The baseline is compiled without
+candidate source. The candidate imports that baseline Kernel, is compared with
+the upstream AST equivalence visitor, and its changed functions/new static
+helpers are cloned into a separate bytecode library. References to unchanged
+methods are rebound to the baseline. The baseline gets generated patch points
+and `vm:never-inline` before AOT global transformations.
+
+The runtime uses an embedded P-256 public key, a fingerprint of the independent
+baseline Kernel plus compiler transforms/AOT binary and all ten release-identity fields. The offline OpenSSL signer
+signs the actual generated DBC3 digest. Signed manifests are stored beside the
+artifact and reverified after restart; modifying both state and artifact is
+insufficient to authenticate a patch. The store returns the same bounded buffer
+it authenticated. Health is committed after functional checks.
+
+This automated corpus covers same-layout field access/mutation, closures,
+named and optional arguments, async, exceptions, nested retained AOT calls and
+dispatch rollback. It rejects changed layout/signature/defaults, generators,
+dynamic private access and lexical super calls before bytecode emission. It
+does not yet implement all Dart constructs or Flutter widget/plugin integration.
+
 The Flutter 3.41.9 SDK ships an AOT `dart2bytecode.dart.snapshot`. It successfully compiles the ordinary fixture into a 945-byte DBC3 format-version-1 module. The installed product AOT runtime then rejects loading with:
 
 ```text
@@ -123,9 +146,9 @@ Upstream dynamic modules add new module declarations; they do not automatically 
 Required work:
 
 1. Build the Flutter-pinned Engine with `dart_dynamic_modules=true` for Android, iOS and OHOS; host execution and Android cross-compilation pass, while iOS has only passed core compilation.
-2. Replace the temporary JSON opcode interpreter with DBC3 modules.
-3. Generate the proven `FunctionId -> interpreted closure` table from real Kernel diffs; unpatched IDs keep the installed AOT entry.
-4. Preserve the existing signed manifest, strong release binding, atomic store and boot rollback outside the experimental loader.
+2. Expand the automatic DBC3 compiler's supported constructs and connect Flutter frontend builds; the old JSON opcode interpreter remains only a separate oracle.
+3. Extend the generated FunctionId tables to the remaining language corpus and deployed platform/isolate lifecycle; the host automatic path passes.
+4. Complete platform durability, native atomic no-follow file access and trusted replay protection around the now-real P-256 authenticated loader.
 5. Add a multi-hour platform soak before release; the upstream suite plus bounded host GC/exception/async/isolate churn gates pass.
 6. Vendor only exact pinned BSD-licensed upstream source changes and assume breaking changes on every Dart upgrade.
 

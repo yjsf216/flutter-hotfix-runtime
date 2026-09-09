@@ -1,5 +1,46 @@
 # Patch IR spike evidence
 
+## Integrated compiler and authenticated loader — 2026-09-09
+
+Reproduce with `DART_BIN=/path/to/dart sh run_compiled_dbc3.sh`, using the
+pinned dynamic-enabled host SDK build. The baseline is compiled independently
+of the candidate. Its identity fingerprints the baseline Kernel, compiler
+transform sources, AOT compiler binary and snapshot mode.
+
+```text
+PASS: ordinary Dart -> automatic patch points -> P-256 signed DBC3/store -> baseline AOT + rollback
+PASS: forged generated patch manifest -> bundled baseline
+PASS: generated field/closure/named/optional/async/exception/nested-call patch + rollback
+PASS: incompatible source changes rejected before DBC3 emission
+PASS: CFE rejects generator before bytecode emission
+PASS: CFE rejects private-dynamic before bytecode emission
+PASS: CFE rejects private-symbol before bytecode emission
+PASS: CFE rejects super before bytecode emission
+PASS: CFE rejects default-value before bytecode emission
+```
+
+`signature_check.dart` cross-checks OpenSSL-produced P-256 signatures and
+rejects 43 adversarial envelopes, plus wrong/revoked public keys. The signed
+store tests reject combined artifact/state/manifest tampering across restart;
+failed activation restores baseline and leaves pending-boot evidence. Health
+requires the load's owning coordinator and occurs after business checks.
+
+The compiler explicitly retains private baseline members, because upstream
+library-wide dynamic-interface annotation skips them. The language fixture
+reads a private field and calls a private AOT method unused in the baseline.
+
+PatchStore now rejects ID overwrites and blacklisted reinstalls, preserves
+failure accounting and LKG, bounds all file reads and returns the exact buffer
+it authenticated. Sparse oversized files and a deterministic rewrite during
+the verification callback test the read boundary.
+
+The generated compiler still rejects unsupported language constructs and is a
+host frontend driver. Flutter Engine integration, the OHOS compiler/runtime
+build, platform durability/no-follow transaction primitives and trusted replay
+state remain incomplete. These checks do not establish three-platform support.
+
+## Historical separate spikes — 2026-09-04
+
 Run on 2026-09-04 with Dart 3.11.5:
 
 ```text

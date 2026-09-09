@@ -1,4 +1,22 @@
-# Patch IR semantic spike
+# Patch IR compiler and runtime checks
+
+`DART_BIN=/path/to/dart sh run_compiled_dbc3.sh` is the integrated host proof:
+ordinary Dart → upstream Kernel comparison/clone → generated AOT patch points
+and DBC3 → OpenSSL P-256 signing → authenticated store/loader → interpreted
+functions calling retained baseline AOT → health commit and rollback.
+
+It requires the pinned dynamic-enabled Dart source build under `work/upstream`.
+Compiler-side tools use that SDK's workspace package config. Business fixtures
+are ordinary Dart; Runtime setup belongs to the application entry point.
+Unsupported shapes are rejected, including changed layout/signature/defaults,
+generic methods/classes, generators, dynamic calls and lexical `super` calls.
+
+`DART_BIN=/path/to/dart sh run_dynamic_aot.sh` separately stresses the real
+signed loader with hand-written dispatch fixtures, GC, exceptions, async and
+16 concurrent isolates. `dart tool/signature_check.dart` verifies the signing
+contract against OpenSSL and adversarial inputs.
+
+## Earlier JSON oracle
 
 Host-only proof that ordinary Dart source can be compiled by the pinned Dart CFE to Kernel, assigned stable class/function IDs, diffed at method granularity, compiled to a tiny class-grouped IR, and dispatched between compiled baseline functions and an interpreter.
 
@@ -6,10 +24,10 @@ Host-only proof that ordinary Dart source can be compiled by the pinned Dart CFE
 DART_BIN=/path/to/flutter/bin/dart sh run.sh
 ```
 
-The Kernel-to-IR compiler intentionally supports only the fixture's static/instance methods, integers, strings, `+`, `>`, calls, branches, and returns. It pins the Dart SDK source revision from Flutter 3.41.9. The signature token and generated baseline closures are explicit spike boundaries; platform cryptography and native AOT entry linkage replace them in the next milestone.
+The earlier Kernel-to-JSON compiler intentionally supports only the fixture's static/instance methods, integers, strings, `+`, `>`, calls, branches, and returns. Its signature token is only an oracle stub; the integrated DBC3 checks above use real P-256 verification.
 
 The build also transforms the CFE Kernel AST to inject method-entry patch points, serializes the transformed `.dill`, and compiles it to a native executable. The executable proves `AOT entry -> changed IR -> unchanged baseline AOT/new IR` plus an unselected direct AOT path, without changing the business source.
 
 The same command also compiles and runs the host patch-store check: SHA-256, atomic file replacement, final-file rehash, `PENDING_BOOT`, last-known-good, two-failure blacklist, withdrawal, tamper detection and bundled fail-open.
 
-It additionally compiles the fixture with Dart's upstream experimental `dart2bytecode` into DBC3. The stock Flutter SDK AOT runtime is expected to report `dart_dynamic_modules=false`; a positive execution check replaces this negative gate after the custom Runtime build exists.
+It additionally checks that the stock Flutter SDK AOT runtime reports `dart_dynamic_modules=false`. The integrated checks use the custom dynamic-enabled Runtime for positive execution.

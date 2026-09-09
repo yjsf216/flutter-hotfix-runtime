@@ -6,55 +6,28 @@ import 'package:crypto/crypto.dart';
 import 'package:dynamic_modules/dynamic_modules.dart';
 
 import '../patch_store.dart';
+import '../signed_manifest.dart';
+import '../signed_patch_loader.dart';
+import 'release_identity.dart';
 import 'runtime_api.dart';
 
-const baselineId = 'dbc3-host-baseline-v1';
-const releaseIdentity = <String, Object?>{
-  'appId': 'dev.hotfixruntime.fixture',
-  'platform': 'host',
-  'abi': 'arm64',
-  'release': '1.0.0+1',
-  'dartVersion': '3.11.5',
-  'engineRevision': '42d3d75a56efe1a2e9902f52dc8006099c45d937',
-};
-
-Future<bool> stagePatch(
-  PatchStore store,
-  String manifestPath,
-  String modulePath,
-) async {
-  try {
-    final manifest = jsonDecode(File(manifestPath).readAsStringSync()) as Map;
-    // ponytail: test token; platform P-256 verifier owns production signature checks.
-    if (manifest['signature'] != 'valid-signature' ||
-        manifest['baselineId'] != baselineId) {
-      return false;
-    }
-    final identity = manifest['identity'];
-    if (identity is! Map ||
-        identity.length != releaseIdentity.length ||
-        releaseIdentity.entries.any(
-          (entry) => identity[entry.key] != entry.value,
-        )) {
-      return false;
-    }
-    final bytes = File(modulePath).readAsBytesSync();
-    if (manifest['irLength'] != bytes.length ||
-        manifest['irSha256'] != sha256.convert(bytes).toString()) {
-      return false;
-    }
-    final patchId = manifest['patchId'];
-    return patchId is String &&
-        store.install(patchId, bytes, manifest['irSha256'] as String);
-  } catch (_) {
-    return false;
-  }
-}
+// Test build injects only the public key; private key stays with the offline
+// OpenSSL signer. Shipping builds embed their release-managed public-key set.
+final manifestVerifier = SignedManifestVerifier(
+  baselineId: baselineId,
+  releaseIdentity: releaseIdentity,
+  publicKeys: {
+    'spike-p256-1': base64.decode(
+      const String.fromEnvironment('HOTFIX_TEST_PUBLIC_KEY'),
+    ),
+  },
+);
 
 Future<void> main() async {
   final pricing = Pricing();
   final storeRoot = Directory('patch-store');
-  final store = PatchStore(storeRoot);
+  final loader = SignedPatchLoader(root: storeRoot, verifier: manifestVerifier);
+  final store = loader.store;
   if (pricing.quote(3) != 4) throw StateError('baseline dispatch failed');
 
   var rejected = false;
@@ -71,22 +44,27 @@ Future<void> main() async {
     throw StateError('invalid table was partially installed');
   }
 
-  if (await stagePatch(
-    store,
-    'bad-manifest.json',
-    'modules/patch.dart.bytecode',
-  )) {
+  if (loader.stage('bad-manifest.json', 'modules/patch.dart.bytecode')) {
     throw StateError('mismatched manifest was accepted');
   }
-  if (await stagePatch(store, 'manifest.json', 'modules/tampered.bytecode')) {
+  if (loader.stage('manifest.json', 'modules/tampered.bytecode')) {
     throw StateError('tampered bytecode was accepted');
   }
+  final unsignedTamper =
+      jsonDecode(File('manifest.json').readAsStringSync())
+          as Map<String, Object?>;
+  (unsignedTamper['manifest'] as Map)['identity'] = {
+    ...releaseIdentity,
+    'channel': 'attacker-channel',
+  };
+  File(
+    'bad-identity.json',
+  ).writeAsBytesSync(canonicalManifestBytes(unsignedTamper));
+  if (loader.stage('bad-identity.json', 'modules/patch.dart.bytecode')) {
+    throw StateError('forged identity was accepted');
+  }
   if (pricing.quote(3) != 4) throw StateError('failed patch changed baseline');
-  if (!await stagePatch(
-    store,
-    'manifest.json',
-    'modules/patch.dart.bytecode',
-  )) {
+  if (!loader.stage('manifest.json', 'modules/patch.dart.bytecode')) {
     throw StateError('valid patch was rejected');
   }
 
@@ -94,20 +72,91 @@ Future<void> main() async {
   if (store.beginBoot() != PatchStore.bundled || pricing.quote(3) != 4) {
     throw StateError('stored tamper did not fall back to baseline');
   }
-  if (!await stagePatch(
-    store,
-    'manifest.json',
-    'modules/patch.dart.bytecode',
-  )) {
+  if (!loader.stage('manifest.json', 'modules/patch.dart.bytecode')) {
     throw StateError('valid patch could not be restaged');
   }
-  final selected = store.beginBoot();
-  final selectedBytes = store.readVerified(selected);
-  if (selected != 'p1' || selectedBytes == null) {
-    throw StateError('stored patch was not selected');
+
+  // Both local state and the stored manifest are untrusted after a restart.
+  for (final alsoForgeManifest in [false, true]) {
+    final attackedRoot = Directory('attacked-store-$alsoForgeManifest');
+    final beforeRestart = SignedPatchLoader(
+      root: attackedRoot,
+      verifier: manifestVerifier,
+    );
+    if (!beforeRestart.stage('manifest.json', 'modules/patch.dart.bytecode')) {
+      throw StateError('attack fixture install failed');
+    }
+    final attackedArtifact = File('${attackedRoot.path}/versions/p1.ir');
+    final changedBytes = attackedArtifact.readAsBytesSync()..[0] ^= 1;
+    attackedArtifact.writeAsBytesSync(changedBytes);
+    final changedHash = sha256.convert(changedBytes).toString();
+    final stateFile = File('${attackedRoot.path}/state.json');
+    final forgedState = jsonDecode(stateFile.readAsStringSync()) as Map;
+    (forgedState['digests'] as Map)['p1'] = changedHash;
+    stateFile.writeAsStringSync(jsonEncode(forgedState));
+    if (alsoForgeManifest) {
+      final manifestFile = File(
+        '${attackedRoot.path}/versions/p1.manifest.json',
+      );
+      final forged =
+          jsonDecode(manifestFile.readAsStringSync()) as Map<String, Object?>;
+      (forged['manifest'] as Map)['artifactSha256'] = changedHash;
+      manifestFile.writeAsBytesSync(canonicalManifestBytes(forged));
+    }
+    final restarted = SignedPatchLoader(
+      root: attackedRoot,
+      verifier: manifestVerifier,
+    );
+    if (restarted.store.beginBoot() != PatchStore.bundled ||
+        restarted.store.readVerified('p1') != null) {
+      throw StateError('artifact/state/manifest forgery survived restart');
+    }
   }
-  installPatches(await loadModuleFromBytes(selectedBytes));
-  if (!store.markHealthy(selected)) throw StateError('health commit failed');
+  void restoreBaseline() => installPatches(<String, PatchBody>{});
+  final failedRoot = Directory('failed-activation-store');
+  final failedLoader = SignedPatchLoader(
+    root: failedRoot,
+    verifier: manifestVerifier,
+  );
+  if (!failedLoader.stage('manifest.json', 'modules/patch.dart.bytecode')) {
+    throw StateError('activation failure fixture install failed');
+  }
+  final failed = await failedLoader.load<Object?>((bytes) async {
+    // Failure injection after authenticated bytes reach application activation.
+    // Actual DBC3 is loaded once below; reloading one module URI is unsupported.
+    installPatches(<String, PatchBody>{Pricing.quoteId: (_) => 99});
+    throw StateError('application rejected initialized patch');
+  }, restoreBaseline: restoreBaseline);
+  final failedState =
+      jsonDecode(File('${failedRoot.path}/state.json').readAsStringSync())
+          as Map;
+  if (failed != null ||
+      pricing.quote(3) != 4 ||
+      failedState['pending'] != 'p1' ||
+      failedState['lastKnownGood'] != null) {
+    throw StateError(
+      'failed activation did not restore baseline and preserve pending evidence',
+    );
+  }
+  final loaded = await loader.load((bytes) async {
+    final module = await loadModuleFromBytes(bytes);
+    installPatches(module);
+    if (pricing.quote(3) != 37) throw StateError('patch activation failed');
+    return module;
+  }, restoreBaseline: restoreBaseline);
+  if (loaded == null || loaded.patchId != 'p1') {
+    throw StateError('signed stored patch was not loaded');
+  }
+  if (failedLoader.markHealthy(loaded)) {
+    throw StateError('foreign loader acknowledged another boot');
+  }
+  final beforeHealth =
+      jsonDecode(File('${storeRoot.path}/state.json').readAsStringSync())
+          as Map;
+  if (beforeHealth['lastKnownGood'] != null ||
+      beforeHealth['pending'] != 'p1') {
+    throw StateError('module load prematurely marked boot healthy');
+  }
 
   for (var i = 0; i < 20000; i++) {
     if (pricing.quote(3) != 37) throw StateError('patched dispatch failed');
@@ -148,7 +197,8 @@ Future<void> main() async {
   if (isolateResults.any((passed) => !passed)) {
     throw StateError('isolate-local patch churn failed');
   }
+  if (!loader.markHealthy(loaded)) throw StateError('health commit failed');
   print(
-    'PASS: verified store + GC/exception/async/isolate AOT <-> interpreted closures',
+    'PASS: P-256 signed store rejects restart forgery + GC/exception/async/isolate AOT <-> interpreted closures',
   );
 }

@@ -67,7 +67,7 @@ BUNDLED -> VERIFIED -> STAGED -> PENDING_BOOT -> HEALTHY -> LAST_KNOWN_GOOD
 
 产品 Patch IR 以固定 Dart revision 的上游 DBC3 bytecode 为基础，而不是长期维护自定义 opcode。Dart 3.11.5 已包含实验性的 `dart2bytecode`、dynamic module loader、KBC interpreter、解释↔AOT 调用、GC root visitation 和异常/async 栈支持；Flutter product Runtime 必须显式以 `dart_dynamic_modules=true` 重建。
 
-当前 JSON opcode 仅作为可审计的语义 oracle，待 dynamic-enabled Runtime 通过后删除。DBC3 仍需外层版本、长度、SHA-256、签名和 release identity 校验；上游 dynamic-interface YAML 用作可调用 baseline API allowlist。
+当前 JSON opcode 仅保留为独立语义 oracle。2026-09-09 已打通普通 Dart → Kernel AST 比较与 clone → 自动 AOT patch points + DBC3 → OpenSSL P-256 签名 → 启动重验与执行。Runtime 使用包内公钥验证全部身份字段和实际产物摘要，baselineId 绑定独立 baseline Kernel、编译器变换源码与 AOT 编译器二进制。上游 dynamic-interface 标注保留 baseline 能力，编译边界拒绝未保留的引用。
 
 ### AOT linker/bridge
 
@@ -96,7 +96,7 @@ Flutter 3.41.9 Engine 已原生提供 `tools/gn --dart-dynamic-modules`，并包
 ## 里程碑与停止门
 
 1. **语义 spike（已通过）**：Dart CFE 把普通 fixture 编译为 Kernel；自动生成稳定 ID；单方法 diff；最小 IR；baseline/AOT 与 patch/interpreter dispatch；坏签名、baselineId、签名结构和 IR 均 fail-open。
-2. **Dart frontend 接入（进行中）**：把当前 Kernel reader 移入上游 frontend 编译流水线，直接输出 metadata/IR 并生成 patch points；如果必须手工注册则停止。
+2. **Dart frontend 接入（host driver 已通过）**：`compileToKernel` 后使用上游 AST equivalence、clone 和 DBC3 codegen，插入 patch points 后运行 AOT 全局优化；继续接入 Flutter 实际 frontend 工具链。
 3. **AOT patch points**：业务 package 禁止跨函数内联并生成 dispatch table；性能损失超过预算则重新划定可更新 package，而不是全局关闭优化。
 4. **上游 dynamic modules（host VM 已通过）**：锁定 Dart 3.11.5 VM 以 `dart_dynamic_modules=true` 构建成功；上游 `core_api` 与仓库内 FunctionId 用例已验证 `AOT -> DBC3 closure -> AOT`；下一门是 Flutter Engine 与三平台构建。
 5. **VM 正确性**：复用并扩展上游字段、虚调用、闭包/泛型、async/异常、GC root、barrier、safepoint、isolate 测试；任何偶发内存错误都停止产品化。

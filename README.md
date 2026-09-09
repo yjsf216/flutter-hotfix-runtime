@@ -6,10 +6,10 @@ Independent, self-hosted research and implementation of a signed Flutter Patch I
 
 | Area | Status | Evidence required to advance |
 |---|---|---|
-| Manifest/security contract | host signing/store checks | platform verifier and key rotation |
+| Manifest/security contract | P-256 verification, exact release binding and restart reauthentication pass in AOT | platform file durability, trusted anti-replay and key operations |
 | Android 3.41.9 baseline | host build verified | device validation is manual and not run by this task |
 | Android external `libapp.so` | research/benchmark only | not a store production backend |
-| Unified Patch IR Runtime | host DBC3 execution/bridge and 38/38 upstream AOT suite passed | Flutter Engine integration and stress gates |
+| Unified Patch IR Runtime | ordinary Dart → automatic Kernel patch points → signed DBC3/store → AOT passes | Flutter Engine integration, remaining language lowering and platform gates |
 | OHOS 3.27.5-ohos-1.0.5 | embedder path located | shared Runtime port after Android/iOS gates |
 | iOS | dynamic-enabled VM core cross-compiles | Flutter Engine link and runtime execution |
 
@@ -37,6 +37,24 @@ sh spikes/android_spike/tool/signing_smoke.sh \
 
 ## Patch IR semantic spike
 
+The integrated compiler/runtime check is:
+
+```sh
+DART_BIN=/path/to/flutter/bin/cache/dart-sdk/bin/dart \
+  sh spikes/patch_ir_spike/run_compiled_dbc3.sh
+```
+
+It compiles the baseline independently, compares real Kernel declarations,
+clones changed methods and new private helpers into DBC3, and automatically
+inserts AOT patch points before global optimization. OpenSSL signs the resulting
+patch; the AOT process verifies P-256 with its embedded public key and exact
+baseline identity, stages and reauthenticates the stored artifact, and activates
+the generated FunctionId table. Tests cover fields, closures, named/optional
+arguments, async, exceptions, nested AOT calls, withdrawal to baseline, forged
+manifests and compiler rejection of incompatible/unsupported input.
+
+The earlier JSON semantic oracle remains a separate check:
+
 ```sh
 DART_BIN=/path/to/flutter/bin/dart \
   sh spikes/patch_ir_spike/run.sh
@@ -52,7 +70,10 @@ DART_SDK_SOURCE="$PWD/work/upstream/dart-sdk" \
   sh spikes/patch_ir_spike/run_dynamic_aot.sh
 ```
 
-Expected: verified store activation plus GC/exception/async AOT↔interpreter PASS lines.
+Expected: P-256 authenticated store activation and rejection of restart forgery,
+plus GC/exception/async/isolate AOT↔interpreter PASS lines. This older bridge
+fixture uses hand-written patch points; `run_compiled_dbc3.sh` covers automatic
+generation.
 
 The external `libapp.so` work is retained only as loading-chain research and an AOT performance baseline. It is not the Android store production backend.
 
