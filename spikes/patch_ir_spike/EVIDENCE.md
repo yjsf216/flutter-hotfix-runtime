@@ -6,9 +6,15 @@
   and business source is updated at the same original path. Baseline AOT, input
   Kernel and release descriptor are byte-for-byte unchanged; corrupted frozen
   Kernel and mismatched compiler fingerprints are rejected.
-- File and package entry aliases preserve same-directory and `../` imports.
+- File and package library identities preserve same-directory and `../` imports.
   AOT execution still returns the frozen dependency values after their on-disk
   sources are deliberately changed, proving the patch does not recompile them.
+- URI-based parts now compile under their original library identity while a
+  temporary in-memory Kernel copy isolates the frozen baseline. Tests change
+  only a part, access private members across parts, and load successive versions
+  in one AOT process (13 then 23). The whole CFE source-bundle digest changes
+  module URI even when the main file is unchanged; identical inputs reproduce
+  identical bytecode and frozen release files are never rewritten.
 - A real Flutter target compiles a StatelessWidget/Text/dart:ui baseline to an
   AOT snapshot and one generated DBC3 module. Framework is retained only in the
   baseline. Loading/rendering in a Flutter Engine is still unverified.
@@ -53,8 +59,12 @@ PASS: CFE rejects default-value before bytecode emission
 `signature_check.dart` cross-checks OpenSSL-produced P-256 signatures and
 rejects 43 adversarial envelopes, plus wrong/revoked public keys. The signed
 store tests reject combined artifact/state/manifest tampering across restart;
-failed activation restores baseline and leaves pending-boot evidence. Health
-requires the load's owning coordinator and occurs after business checks.
+explicit activation failure durably rejects its attempt and immediately tries a
+distinct reauthenticated LKG. Real DBC3 tests cover success, a second failure,
+duplicate module URI and rejection-write failure in separate AOT processes;
+callbacks are bounded to two (one when persistence fails). Health requires the
+load's owning coordinator and occurs after business checks. Unexplained process
+death still leaves pending-boot evidence for the original failure threshold.
 
 The compiler explicitly retains private baseline members, because upstream
 library-wide dynamic-interface annotation skips them. The language fixture

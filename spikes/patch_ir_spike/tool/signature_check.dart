@@ -13,17 +13,18 @@ const _keyId = 'spike-p256-1';
 void main(List<String> args) {
   if (args.length == 2 && args[0] == 'keygen') {
     _keygen(Directory(args[1]));
-  } else if ((args.length == 4 || args.length == 5) && args[0] == 'sign') {
+  } else if ((args.length >= 4 && args.length <= 6) && args[0] == 'sign') {
     final directory = Directory(args[1]);
     final artifact = File(args[2]).readAsBytesSync();
     final manifest = _manifest(artifact, DateTime.now().toUtc());
-    if (args.length == 5) manifest['baselineId'] = args[4];
+    if (args.length >= 5) manifest['baselineId'] = args[4];
+    if (args.length == 6) manifest['patchId'] = args[5];
     File(args[3]).writeAsBytesSync(_sign(directory, manifest));
   } else if (args.isEmpty) {
     _selfCheck();
   } else {
     throw ArgumentError(
-      'usage: signature_check.dart [keygen DIR | sign DIR ARTIFACT MANIFEST [BASELINE_ID]]',
+      'usage: signature_check.dart [keygen DIR | sign DIR ARTIFACT MANIFEST [BASELINE_ID [PATCH_ID]]]',
     );
   }
 }

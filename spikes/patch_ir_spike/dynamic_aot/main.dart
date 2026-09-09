@@ -24,7 +24,11 @@ final manifestVerifier = SignedManifestVerifier(
   },
 );
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
+  if (args.isNotEmpty) {
+    await checkLkgFallback(args[0], Directory(args[1]));
+    return;
+  }
   final pricing = Pricing();
   final storeRoot = Directory('patch-store');
   final loader = SignedPatchLoader(root: storeRoot, verifier: manifestVerifier);
@@ -79,8 +83,14 @@ Future<void> main() async {
 
   // Two async loads of the same signed patch must retain distinct health
   // capabilities, whether they share a loader or have independent owners.
-  for (final sameOwner in [false, true]) {
-    final overlapRoot = Directory('overlapping-loads-$sameOwner');
+  for (final scenario in [
+    (false, false),
+    (false, true),
+    (true, false),
+    (true, true),
+  ]) {
+    final (sameOwner, failsLate) = scenario;
+    final overlapRoot = Directory('overlapping-loads-$sameOwner-$failsLate');
     final first = SignedPatchLoader(
       root: overlapRoot,
       verifier: manifestVerifier,
@@ -93,23 +103,37 @@ Future<void> main() async {
     }
     final entered = Completer<void>();
     final resume = Completer<void>();
-    final waiting = first.load((bytes) async {
-      entered.complete();
-      await resume.future;
+    var activeOwner = 'bundled';
+    var oldRollbacks = 0;
+    final waiting = first.load(
+      (bytes) async {
+        entered.complete();
+        await resume.future;
+        if (failsLate) throw StateError('superseded asynchronous failure');
+        return bytes.length;
+      },
+      restoreBaseline: () {
+        oldRollbacks++;
+        activeOwner = 'bundled';
+      },
+    );
+    await entered.future;
+    final newest = await second.load((bytes) async {
+      activeOwner = 'newest';
       return bytes.length;
     }, restoreBaseline: () {});
-    await entered.future;
-    final newest = await second.load(
-      (bytes) async => bytes.length,
-      restoreBaseline: () {},
-    );
-    resume.complete();
-    final stale = await waiting;
-    if (newest == null || stale == null)
-      throw StateError('overlap load failed');
     final state = File('${overlapRoot.path}/state.json');
     final beforeLateAck = state.readAsStringSync();
-    if (first.markHealthy(stale) || state.readAsStringSync() != beforeLateAck) {
+    resume.complete();
+    final stale = await waiting;
+    if (newest == null ||
+        (!failsLate && stale == null) ||
+        (failsLate && stale != null))
+      throw StateError('overlap load failed');
+    if ((stale != null && first.markHealthy(stale)) ||
+        state.readAsStringSync() != beforeLateAck ||
+        oldRollbacks != 0 ||
+        activeOwner != 'newest') {
       throw StateError('stale loaded result cleared newer pending/failures');
     }
     if (!second.markHealthy(newest))
@@ -172,10 +196,11 @@ Future<void> main() async {
           as Map;
   if (failed != null ||
       pricing.quote(3) != 4 ||
-      failedState['pending'] != 'p1' ||
+      failedState['pending'] != null ||
+      !(failedState['blacklist'] as List).contains('p1') ||
       failedState['lastKnownGood'] != null) {
     throw StateError(
-      'failed activation did not restore baseline and preserve pending evidence',
+      'failed activation did not restore baseline and persist rejection evidence',
     );
   }
   final loaded = await loader.load((bytes) async {
@@ -241,4 +266,106 @@ Future<void> main() async {
   print(
     'PASS: P-256 signed store rejects restart forgery + GC/exception/async/isolate AOT <-> interpreted closures',
   );
+}
+
+// Each mode is a separate host process, matching startup-only module loading.
+// The seed process first commits a genuinely executed, signed DBC3 as LKG.
+Future<void> checkLkgFallback(String mode, Directory root) async {
+  final loader = SignedPatchLoader(root: root, verifier: manifestVerifier);
+  final sameUri = mode == 'same-uri';
+  final manifest = mode == 'seed'
+      ? 'manifest.json'
+      : sameUri
+      ? 'same-uri-manifest.json'
+      : 'failing-manifest.json';
+  final artifact = mode == 'seed' || sameUri
+      ? 'modules/patch.dart.bytecode'
+      : 'modules/failing_patch.dart.bytecode';
+  if (!loader.stage(manifest, artifact))
+    throw StateError('LKG fixture staging failed');
+  final stateFile = File('${root.path}/state.json');
+  var calls = 0;
+  var restores = 0;
+  var deniedWrites = false;
+  String? beforeRejectedWrite;
+  final errors = <String>[];
+  LoadedPatch<Object?>? loaded;
+  try {
+    loaded = await loader.load<Object?>(
+      (bytes) async {
+        calls++;
+        try {
+          final value = await loadModuleFromBytes(bytes);
+          installPatches(value);
+          if (mode == 'double-failure' || sameUri && calls == 1) {
+            throw StateError('application rejected activated module');
+          }
+          return value;
+        } catch (error) {
+          errors.add('$error');
+          if (mode == 'persist-failure') {
+            beforeRejectedWrite = stateFile.readAsStringSync();
+            final chmod = Process.runSync('chmod', ['500', root.path]);
+            if (chmod.exitCode != 0)
+              throw StateError('failure injection chmod failed');
+            deniedWrites = true;
+          }
+          rethrow;
+        }
+      },
+      restoreBaseline: () {
+        restores++;
+        installPatches(<String, PatchBody>{});
+      },
+    );
+  } finally {
+    if (deniedWrites &&
+        Process.runSync('chmod', ['700', root.path]).exitCode != 0) {
+      throw StateError('failure injection cleanup failed');
+    }
+  }
+  final state = jsonDecode(stateFile.readAsStringSync()) as Map;
+  if (mode == 'seed') {
+    if (loaded?.patchId != 'p1' ||
+        Pricing().quote(3) != 37 ||
+        !loader.markHealthy(loaded!))
+      throw StateError('LKG seed health failed');
+  } else if (mode == 'fallback') {
+    if (loaded?.patchId != 'p1' ||
+        calls != 2 ||
+        restores != 1 ||
+        Pricing().quote(3) != 37 ||
+        !(state['blacklist'] as List).contains('p2') ||
+        state['pending'] != 'p1' ||
+        state['lastKnownGood'] != 'p1') {
+      throw StateError(
+        'VM failure did not recover signed LKG without auto health',
+      );
+    }
+    if (!loader.markHealthy(loaded!))
+      throw StateError('fallback health failed');
+  } else if (mode == 'persist-failure') {
+    if (loaded != null ||
+        calls != 1 ||
+        restores != 1 ||
+        Pricing().quote(3) != 4 ||
+        stateFile.readAsStringSync() != beforeRejectedWrite) {
+      throw StateError('failed rejection write loaded LKG or erased evidence');
+    }
+  } else {
+    if (loaded != null ||
+        calls != 2 ||
+        restores != 2 ||
+        Pricing().quote(3) != 4 ||
+        !(state['blacklist'] as List).contains('p1') ||
+        !(state['blacklist'] as List).contains('p2') ||
+        state['pending'] != null ||
+        state['lastKnownGood'] != null ||
+        (sameUri && !errors.any((error) => error.contains('already loaded')))) {
+      throw StateError('failed LKG or duplicate URI did not stop at bundled');
+    }
+  }
+  loader.close();
+  if (mode != 'seed')
+    print('PASS: signed DBC3 LKG $mode; callbacks=$calls, restores=$restores');
 }

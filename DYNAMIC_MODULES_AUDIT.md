@@ -24,12 +24,14 @@ The compiler now exposes `compileBaseline` and `compilePatch` plus separate
 `release`/`patch` CLI commands. The release descriptor binds the input Kernel,
 compiler/AOT binary, platform digest, target, environment and retained interface.
 Patch compilation verifies this descriptor and does not emit replacement AOT.
-An in-place source update uses an independent entry alias in the original
-file/package directory so it cannot accidentally reuse the frozen old body.
-Relative imports keep their original dependency URIs. Tests remove the original
-entry, check every frozen artifact remains unchanged, and execute old dependency
-AOT values even after those dependency sources change on disk. URI-based
-`part of` libraries still require candidate-identity handling.
+The archived library is temporarily renamed only in an in-memory Kernel copy,
+allowing CFE to compile the candidate under its real file/package URI, including
+relative imports and URI-based `part of` ownership. Canonical references are
+restored before bytecode emission. Tests remove the original entry, check every
+frozen artifact remains unchanged, and execute old dependency AOT values even
+after those dependency sources change on disk. Part-only updates bind their
+actual CFE source bundle into module identity, and successive versions load in
+one AOT process with correct cross-part private access.
 
 The same phases accept `target=flutter` and the installed product platform dill.
 `run_flutter_kernel.sh` compiles real StatelessWidget/Text/dart:ui code, emits

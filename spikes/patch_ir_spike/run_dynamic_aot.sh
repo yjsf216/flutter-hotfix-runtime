@@ -50,6 +50,7 @@ compile_kernel --no-aot "$tmp_dir/main_no_aot.dill"
   --elf="$tmp_dir/main.snapshot" \
   "$tmp_dir/main_aot.dill"
 
+for module in patch failing_patch; do
 "$out_dir/dartaotruntime_product" --disable-dart-dev \
   "$out_dir/gen/dart2bytecode.dart.snapshot" \
   --platform "$out_dir/vm_platform.dill" \
@@ -60,11 +61,18 @@ compile_kernel --no-aot "$tmp_dir/main_no_aot.dill"
   --validate dev-hotfix:/dynamic_aot/dynamic_interface.yaml \
   --filesystem-root "$fixture_dir" \
   --filesystem-scheme dev-hotfix \
-  --output "$tmp_dir/modules/patch.dart.bytecode" \
-  dev-hotfix:/dynamic_aot/modules/patch.dart
+  --output "$tmp_dir/modules/$module.dart.bytecode" \
+  "dev-hotfix:/dynamic_aot/modules/$module.dart"
+done
 
 "$dart_bin" "$fixture_dir/tool/signature_check.dart" sign \
   "$tmp_dir/signing" "$tmp_dir/modules/patch.dart.bytecode" "$tmp_dir/manifest.json"
+"$dart_bin" "$fixture_dir/tool/signature_check.dart" sign \
+  "$tmp_dir/signing" "$tmp_dir/modules/failing_patch.dart.bytecode" \
+  "$tmp_dir/failing-manifest.json" dbc3-host-baseline-v1 p2
+"$dart_bin" "$fixture_dir/tool/signature_check.dart" sign \
+  "$tmp_dir/signing" "$tmp_dir/modules/patch.dart.bytecode" \
+  "$tmp_dir/same-uri-manifest.json" dbc3-host-baseline-v1 p2
 sed 's/dbc3-host-baseline-v1/wrong-baseline/' \
   "$tmp_dir/manifest.json" > "$tmp_dir/bad-manifest.json"
 cp "$tmp_dir/modules/patch.dart.bytecode" "$tmp_dir/modules/tampered.bytecode"
@@ -83,3 +91,9 @@ printf '%s\n' "$runtime_output" | grep '^PASS:'
 gc_count=$(printf '%s\n' "$runtime_output" | grep -c 'Scavenge')
 test "$gc_count" -gt 0
 echo "PASS: observed $gc_count scavenges while interpreted frames were live"
+for scenario in fallback double-failure same-uri persist-failure; do
+  (cd "$tmp_dir" && "$out_dir/dartaotruntime_product" main.snapshot \
+    seed "lkg-$scenario")
+  (cd "$tmp_dir" && "$out_dir/dartaotruntime_product" main.snapshot \
+    "$scenario" "lkg-$scenario")
+done

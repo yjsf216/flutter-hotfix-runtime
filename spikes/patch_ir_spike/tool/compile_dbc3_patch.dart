@@ -5,9 +5,12 @@ import 'package:crypto/crypto.dart';
 import 'package:dart2bytecode/bytecode_generator.dart' show generateBytecode;
 import 'package:dart2bytecode/options.dart' show BytecodeOptions;
 import 'package:front_end/src/api_prototype/file_system.dart' as front_end_fs;
+import 'package:front_end/src/api_prototype/memory_file_system.dart';
 import 'package:front_end/src/api_prototype/standard_file_system.dart';
 import 'package:front_end/src/api_unstable/vm.dart' show CompilerOptions;
+import 'package:front_end/src/base/hybrid_file_system.dart';
 import 'package:kernel/class_hierarchy.dart';
+import 'package:kernel/binary/ast_from_binary.dart';
 import 'package:kernel/clone.dart';
 import 'package:kernel/core_types.dart';
 import 'package:kernel/kernel.dart';
@@ -351,11 +354,27 @@ Future<void> compilePatch({
   }
   final candidateFile = File.fromUri(updatedUri);
   final baselineUri = Uri.parse(recipe['baselineLibraryUri'] as String);
-  // Give only this entry a new identity. Keeping its original scheme/directory
-  // lets CFE resolve relative imports back to the frozen file:/package: libraries.
-  final sourceUri = baselineUri.resolve(
-    '.hotfix_candidate_${sha256.convert(candidateFile.readAsBytesSync())}.dart',
+  // CFE must see the candidate's original URI so URI-based `part of` directives
+  // retain their ownership. Temporarily rename only the frozen Kernel library,
+  // in memory; source files and the archived release are never rewritten.
+  final frozenComponent = Component();
+  BinaryBuilder(
+    baseInput.readAsBytesSync(),
+    disableLazyReading: true,
+  ).readComponent(frozenComponent);
+  final frozenLibrary = frozenComponent.libraries.singleWhere(
+    (library) => library.importUri == baselineUri,
   );
+  final frozenLibraryUri = Uri.parse('hotfix-baseline:$buildId/business.dart');
+  frozenComponent.unbindCanonicalNames();
+  frozenLibrary.importUri = frozenLibraryUri;
+  frozenComponent.computeCanonicalNames();
+  final memory = MemoryFileSystem(Uri.parse('hotfix-input:/'));
+  final frozenInputUri = Uri.parse('hotfix-input:/baseline.dill');
+  memory
+      .entityForUri(frozenInputUri)
+      .writeAsBytesSync(writeComponentToBytes(frozenComponent));
+  final sourceUri = baselineUri;
   final packages =
       packagesFileUri ?? spike.uri.resolve('.dart_tool/package_config.json');
   final sourceFileUri = sourceUri.isScheme('package')
@@ -370,8 +389,11 @@ Future<void> compilePatch({
   final options = CompilerOptions()
     ..sdkSummary = platform
     ..packagesFileUri = packages
-    ..fileSystem = _CandidateFileSystem(sourceFileUri, candidateFile.uri)
-    ..additionalDills = [baseInput.absolute.uri]
+    ..fileSystem = HybridFileSystem(
+      memory,
+      _CandidateFileSystem(sourceFileUri, candidateFile.uri),
+    )
+    ..additionalDills = [frozenInputUri]
     ..target = target
     ..onDiagnostic = errors.call;
   final result = await compileToKernel(
@@ -395,11 +417,36 @@ Future<void> compilePatch({
       .toSet();
   output.createSync(recursive: true);
   final baseline = component.libraries.singleWhere(
-    (lib) => lib.importUri == baselineUri,
+    (lib) => lib.importUri == frozenLibraryUri,
   );
   final updated = component.libraries.singleWhere(
-    (lib) => lib.fileUri == sourceFileUri,
+    (lib) => lib.importUri == baselineUri,
   );
+  // Hash the actual sources used by CFE, including parts (even when the entry
+  // file is unchanged), rather than re-reading only the entry from disk.
+  final sourceUris = component.uriToSource.keys.toList()
+    ..sort((left, right) => left.toString().compareTo(right.toString()));
+  final sourceBundleSha256 = sha256
+      .convert(
+        utf8.encode(
+          jsonEncode({
+            for (final uri in sourceUris)
+              uri.toString(): sha256
+                  .convert(component.uriToSource[uri]!.source)
+                  .toString(),
+          }),
+        ),
+      )
+      .toString();
+  // Imported dill bodies are lazy; load them before changing canonical names.
+  component.accept(RecursiveVisitor());
+  component.unbindCanonicalNames();
+  updated.importUri = Uri.parse(
+    'hotfix-candidate:$sourceBundleSha256/business.dart',
+  );
+  baseline.importUri = baselineUri;
+  component.computeCanonicalNames();
+  updatedUri = updated.importUri;
   final core = CoreTypes(component);
   final previous = _methods(baseline);
   final next = _methods(updated);
@@ -460,7 +507,7 @@ Future<void> compilePatch({
   if (changed.isEmpty) throw const FormatException('no changed functions');
 
   final moduleUri = Uri.parse(
-    'hotfix:patch/$buildId/${sha256.convert(candidateFile.readAsBytesSync())}/module.dart',
+    'hotfix:patch/$buildId/$sourceBundleSha256/module.dart',
   );
   final module = Library(moduleUri, fileUri: updatedUri)..parent = component;
   final implementations = <Procedure, Procedure>{};
@@ -637,6 +684,7 @@ Future<void> compilePatch({
           _key(p),
       ],
       'moduleLibraries': [moduleUri.toString()],
+      'sourceBundleSha256': sourceBundleSha256,
       'artifactSha256': await _digestFile(
         File('${output.path}/patch.bytecode'),
       ),

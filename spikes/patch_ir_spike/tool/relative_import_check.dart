@@ -12,8 +12,9 @@ Future<void> main(List<String> arguments) async {
   final temporary = Directory.systemTemp.createTempSync('relative-import-');
   final root = Directory(temporary.resolveSymbolicLinksSync());
   try {
-    for (final usePackage in [false, true]) {
-      final name = usePackage ? 'package' : 'file';
+    for (final name in ['file', 'package', 'file-parts', 'package-parts']) {
+      final usePackage = name.startsWith('package');
+      final withParts = name.endsWith('-parts');
       final directory = Directory('${root.path}/$name')..createSync();
       final source = Directory('${directory.path}/lib/src')
         ..createSync(recursive: true);
@@ -22,7 +23,14 @@ Future<void> main(List<String> arguments) async {
       final shared = File('${directory.path}/lib/shared.dart')
         ..writeAsStringSync('int sharedValue() => 2;');
       final business = File('${source.path}/business.dart')
-        ..writeAsStringSync(_business(0));
+        ..writeAsStringSync(withParts ? _partBusiness : _business(0));
+      final partDirectory = Directory('${source.path}/parts')..createSync();
+      final servicePart = File('${partDirectory.path}/service.dart');
+      final helperPart = File('${partDirectory.path}/helper.dart');
+      if (withParts) {
+        servicePart.writeAsStringSync(_servicePart(0));
+        helperPart.writeAsStringSync(_helperPart(0));
+      }
       final packagesSource = File(
         '${spike.path}/.dart_tool/package_config.json',
       );
@@ -63,9 +71,11 @@ import '$libraryUri';
 Future<void> main(List<String> arguments) async {
   final service = Service();
   if (service.value() != 3) throw StateError('baseline result');
-  runtime.activateModule(await loadModuleFromBytes(File(arguments.single).readAsBytesSync()));
-  if (service.value() != 13) throw StateError('patch did not reuse frozen dependency AOT');
-  print('PASS: $name relative imports -> frozen dependency AOT');
+  for (var i = 0; i < arguments.length; i++) {
+    runtime.activateModule(await loadModuleFromBytes(File(arguments[i]).readAsBytesSync()));
+    if (service.value() != 13 + i * 10) throw StateError('patch did not reuse frozen dependency AOT');
+  }
+  print('PASS: $name relative imports/parts -> frozen dependency AOT');
 }
 ''');
       final release = Directory('${directory.path}/release');
@@ -84,19 +94,64 @@ Future<void> main(List<String> arguments) async {
         for (final file in release.listSync().whereType<File>())
           file.path: sha256.convert(file.readAsBytesSync()).toString(),
       };
+      final originalRoot = sha256
+          .convert(business.readAsBytesSync())
+          .toString();
       // Replace the selected source in place. Dependency sources deliberately
       // disagree with the release, so executing 13 proves frozen AOT reuse.
-      business.writeAsStringSync(_business(10));
       local.writeAsStringSync('int localValue() => 100;');
       shared.writeAsStringSync('int sharedValue() => 200;');
-      final patch = Directory('${directory.path}/patch');
-      await compiler.compilePatch(
-        sdk: sdk,
-        release: release,
-        updatedUri: business.uri,
-        output: patch,
-        packagesFileUri: packages.uri,
-      );
+      final artifacts = <String>[];
+      final moduleUris = <String>{};
+      final sourceHashes = <String>{};
+      for (var version = 1; version <= 2; version++) {
+        if (withParts) {
+          helperPart.writeAsStringSync(_helperPart(10, (version - 1) * 5));
+          servicePart.writeAsStringSync(_servicePart((version - 1) * 5));
+        } else {
+          business.writeAsStringSync(_business(version * 10));
+        }
+        final patch = Directory('${directory.path}/patch-$version');
+        await compiler.compilePatch(
+          sdk: sdk,
+          release: release,
+          updatedUri: business.uri,
+          output: patch,
+          packagesFileUri: packages.uri,
+        );
+        artifacts.add('${patch.path}/patch.bytecode');
+        final metadata =
+            jsonDecode(File('${patch.path}/metadata.json').readAsStringSync())
+                as Map;
+        moduleUris.add((metadata['moduleLibraries'] as List).single as String);
+        sourceHashes.add(metadata['sourceBundleSha256'] as String);
+      }
+      if (moduleUris.length != 2 || sourceHashes.length != 2) {
+        throw StateError('different candidate sources reused module identity');
+      }
+      if (withParts &&
+          sha256.convert(business.readAsBytesSync()).toString() !=
+              originalRoot) {
+        throw StateError('part-only fixture changed its root library');
+      }
+      if (withParts) {
+        final repeated = Directory('${directory.path}/patch-repeat');
+        await compiler.compilePatch(
+          sdk: sdk,
+          release: release,
+          updatedUri: business.uri,
+          output: repeated,
+          packagesFileUri: packages.uri,
+        );
+        if (sha256.convert(File(artifacts.last).readAsBytesSync()).toString() !=
+            sha256
+                .convert(
+                  File('${repeated.path}/patch.bytecode').readAsBytesSync(),
+                )
+                .toString()) {
+          throw StateError('unchanged part bundle produced different bytecode');
+        }
+      }
       for (final file in frozen.entries) {
         if (sha256.convert(File(file.key).readAsBytesSync()).toString() !=
             file.value) {
@@ -111,7 +166,7 @@ Future<void> main(List<String> arguments) async {
       ]);
       await _run('${sdk.path}/xcodebuild/ReleaseARM64/dartaotruntime_product', [
         snapshot,
-        '${patch.path}/patch.bytecode',
+        ...artifacts,
       ]);
     }
   } finally {
@@ -124,6 +179,29 @@ String _business(int extra) =>
 import 'local.dart';
 import '../shared.dart';
 class Service { int value() => localValue() + sharedValue() + $extra; }
+''';
+
+const _partBusiness = '''
+import 'local.dart';
+import '../shared.dart';
+part 'parts/service.dart';
+part 'parts/helper.dart';
+''';
+
+String _servicePart(int extra) =>
+    '''
+part of '../business.dart';
+class Service {
+  int _offset = 0;
+  int value() => _readPrivate(this) + _delta() + $extra;
+}
+''';
+
+String _helperPart(int extra, [int readExtra = 0]) =>
+    '''
+part of '../business.dart';
+int _readPrivate(Service service) => localValue() + sharedValue() + service._offset + $readExtra;
+int _delta() => $extra;
 ''';
 
 Future<void> _run(String executable, List<String> arguments) async {

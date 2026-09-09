@@ -46,6 +46,10 @@ void main() {
     check(!ownerA.markHealthy('p1'), 'legacy API acknowledged a stale attempt');
     check(!ownerB.markBootHealthy(attemptA), 'foreign attempt acknowledged');
     check(
+      ownerA.rejectBootAndBeginFallback(attemptA)?.superseded == true,
+      'stale failure rejected another owner\'s pending patch',
+    );
+    check(
       attemptState.readAsStringSync() == beforeStaleHealth,
       'stale health changed the new pending/failure state',
     );
@@ -91,6 +95,55 @@ void main() {
     );
     check(!restartedLegacy.markHealthy('p1'));
     check(attemptState.readAsStringSync() == beforeClose);
+
+    final failedStore = PatchStore(Directory('${root.path}/explicit-failure'));
+    check(failedStore.install('p1', p1, digest1));
+    check(failedStore.beginBoot() == 'p1' && failedStore.markHealthy('p1'));
+    check(failedStore.install('p2', p2, digest2));
+    final rejectedAttempt = failedStore.beginBootAttempt()!;
+    check(failedStore.install('p3', p3, digest3));
+    final rejected = failedStore.rejectBootAndBeginFallback(rejectedAttempt)!;
+    check(!rejected.superseded && rejected.fallback?.patchId == 'p1');
+    final failedStateFile = File('${failedStore.root.path}/state.json');
+    var rejectedState = jsonDecode(failedStateFile.readAsStringSync()) as Map;
+    check(
+      rejectedState['active'] == 'p3',
+      'failure erased concurrently staged candidate',
+    );
+    check(
+      rejectedState['pending'] == 'p1' &&
+          (rejectedState['blacklist'] as List).contains('p2'),
+    );
+    check(failedStore.readVerified('p2') == null);
+    check(!failedStore.markBootHealthy(rejectedAttempt));
+    check(failedStore.markBootHealthy(rejected.fallback!));
+    check(
+      !failedStore.install('p2', p2, digest2),
+      'fallback health erased rejection',
+    );
+    final nextAttempt = failedStore.beginBootAttempt()!;
+    check(nextAttempt.patchId == 'p3');
+    final fallbackAttempt = failedStore
+        .rejectBootAndBeginFallback(nextAttempt)!
+        .fallback!;
+    final failedFallback = failedStore.rejectBootAndBeginFallback(
+      fallbackAttempt,
+      allowFallback: false,
+    )!;
+    check(!failedFallback.superseded && failedFallback.fallback == null);
+    rejectedState = jsonDecode(failedStateFile.readAsStringSync()) as Map;
+    check(
+      rejectedState['lastKnownGood'] == null &&
+          rejectedState['pending'] == null,
+    );
+    check(
+      (rejectedState['blacklist'] as List).toSet().containsAll([
+        'p1',
+        'p2',
+        'p3',
+      ]),
+    );
+    check(failedStore.beginBoot() == PatchStore.bundled);
     for (final id in ['', '../escape', 'bundled', '.', 'a/b', 'p1\n']) {
       check(!store.install(id, p1, digest1), 'invalid install ID: $id');
       check(store.readVerified(id) == null, 'invalid read ID: $id');
@@ -416,6 +469,9 @@ void main() {
     check(!PatchStore(oversizedOrphanRoot).install('p1', p1, digest1));
     check(oversizedOrphan.lengthSync() == PatchStore.maxArtifactBytes + 1);
 
+    print(
+      'PASS: explicit failure rejection + atomic LKG attempt preserves concurrent installs and rejection evidence',
+    );
     print(
       'PASS: boot-attempt ownership rejects late/same-owner acknowledgements and preserves legacy failure evidence',
     );

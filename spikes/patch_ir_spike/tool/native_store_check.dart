@@ -72,6 +72,10 @@ Future<void> main(List<String> arguments) async {
       );
       check(!store.markHealthy('next'), 'legacy API cleared newer native boot');
       check(
+        store.rejectBootAndBeginFallback(firstAttempt)?.superseded == true,
+        'stale native failure rejected newer pending patch',
+      );
+      check(
         stateFile.readAsStringSync() == beforeLateAck,
         'stale native ack changed pending/failures',
       );
@@ -82,6 +86,26 @@ Future<void> main(List<String> arguments) async {
     } finally {
       other.close();
     }
+    check(store.install('native-bad', bytes, hash), 'stage explicit failure');
+    final failingAttempt = store.beginBootAttempt()!;
+    check(
+      store.install('native-next', bytes, hash),
+      'stage concurrent successor',
+    );
+    final rejection = store.rejectBootAndBeginFallback(failingAttempt)!;
+    check(
+      !rejection.superseded && rejection.fallback?.patchId == 'next',
+      'native failure did not atomically select LKG',
+    );
+    check(store.markBootHealthy(rejection.fallback!), 'native fallback health');
+    final beforeWorkers =
+        jsonDecode(File('${root.path}/state.json').readAsStringSync()) as Map;
+    check(
+      beforeWorkers['active'] == 'native-next' &&
+          (beforeWorkers['blacklist'] as List).contains('native-bad'),
+      'native fallback erased rejection or concurrent successor',
+    );
+    final existingCount = (beforeWorkers['digests'] as Map).length;
     var rejected = false;
     io.transaction(() {
       try {
@@ -101,7 +125,7 @@ Future<void> main(List<String> arguments) async {
     final state =
         jsonDecode(File('${root.path}/state.json').readAsStringSync()) as Map;
     check(
-      (state['digests'] as Map).length == 82,
+      (state['digests'] as Map).length == existingCount + 80,
       'lost native transaction update',
     );
     final file = File('${root.path}/versions/p0.ir');

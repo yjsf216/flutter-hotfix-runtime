@@ -43,8 +43,14 @@ for manifests, 64 MiB for artifacts and 1 MiB for store state.
 Store tests cover immutable IDs, preserved LKG, pending-boot failure accounting,
 blacklist, withdrawal, damaged state, symlinks, oversized sparse files, and
 returning the exact authenticated buffer even if disk changes during validation.
-Loader failures restore baseline dispatch and preserve pending failure evidence;
-only the owning loader can acknowledge a completed load as healthy. Each boot
+An explicit VM/activation failure atomically rejects that exact boot attempt and
+selects a distinct, reauthenticated LKG. A second failure, duplicate module URI,
+or failed rejection persistence falls back to bundled without a retry loop.
+Unexplained process death still uses the two-incomplete-boot threshold. Stale
+callback failures cannot reject a newer attempt or invoke its dispatch rollback;
+application activation must still be scheduled by one startup coordinator, since
+arbitrary callback side effects cannot be undone by the store.
+Only the owning loader can acknowledge a completed load as healthy. Each boot
 persists a fresh 128-bit attempt token; health also requires the original local
 capability and an exact match with the current durable attempt. Delayed health
 from an earlier same-ID boot or another owner cannot erase a newer pending

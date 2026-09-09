@@ -22,7 +22,10 @@ Compiler-side tools use that SDK's workspace package config. Business fixtures
 are ordinary Dart; Runtime setup belongs to the application entry point.
 Unsupported shapes are rejected, including changed layout/signature/defaults,
 generic methods/classes, generators, dynamic calls and lexical `super` calls.
-URI-based `part of` libraries remain unsupported by the candidate-entry alias.
+URI-based `part of` libraries are supported without rewriting business source:
+the frozen Kernel library is temporarily renamed in memory, while CFE sees the
+candidate's real logical URI. Module identity hashes the actual source bundle,
+so changing only a part still produces a distinct loadable module.
 
 `DART_BIN=/path/to/dart sh run_dynamic_aot.sh` separately stresses the real
 signed loader with hand-written dispatch fixtures, GC, exceptions, async and

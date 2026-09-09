@@ -82,6 +82,17 @@ class PatchStore {
 
   bool markBootHealthy(PatchBootAttempt attempt) =>
       _transaction(false, () => _markBootHealthy(attempt));
+
+  /// Explicit load failures are rejected immediately; unexplained incomplete
+  /// boots still use failureLimit. Null means persistence failed; a superseded
+  /// result must not roll back another owner's more recent activation.
+  ({bool superseded, PatchBootAttempt? fallback})? rejectBootAndBeginFallback(
+    PatchBootAttempt attempt, {
+    bool allowFallback = true,
+  }) => _transaction(
+    null,
+    () => _rejectBootAndBeginFallback(attempt, allowFallback),
+  );
   bool withdraw(String patchId) =>
       _transaction(false, () => _withdraw(patchId));
   void close() {
@@ -163,21 +174,62 @@ class PatchStore {
       final selected = _select(state);
       if (selected != pending) state['failures'] = 0;
       state['pending'] = selected == bundled ? null : selected;
-      final random = Random.secure();
-      final attempt = selected == bundled
-          ? null
-          : PatchBootAttempt._(
-              this,
-              selected,
-              List.generate(
-                16,
-                (_) => random.nextInt(256),
-              ).map((byte) => byte.toRadixString(16).padLeft(2, '0')).join(),
-            );
+      final attempt = selected == bundled ? null : _newAttempt(selected);
       state['pendingAttempt'] = attempt?._token;
       _write(state);
       _ownedBoot = attempt;
       return attempt;
+    } on Object {
+      return null;
+    }
+  }
+
+  PatchBootAttempt _newAttempt(String patchId) {
+    final random = Random.secure();
+    return PatchBootAttempt._(
+      this,
+      patchId,
+      List.generate(
+        16,
+        (_) => random.nextInt(256),
+      ).map((byte) => byte.toRadixString(16).padLeft(2, '0')).join(),
+    );
+  }
+
+  ({bool superseded, PatchBootAttempt? fallback})? _rejectBootAndBeginFallback(
+    PatchBootAttempt attempt,
+    bool allowFallback,
+  ) {
+    try {
+      if (!identical(attempt._owner, this) || !identical(attempt, _ownedBoot)) {
+        return (superseded: true, fallback: null);
+      }
+      final state = _read();
+      final patchId = attempt.patchId;
+      if (state['pending'] != patchId ||
+          state['pendingAttempt'] != attempt._token) {
+        return (superseded: true, fallback: null);
+      }
+      final blacklist = state['blacklist'] as List<Object?>;
+      if (!blacklist.contains(patchId)) blacklist.add(patchId);
+      if (state['lastKnownGood'] == patchId) state['lastKnownGood'] = null;
+      if (state['active'] == patchId) state['active'] = state['lastKnownGood'];
+      final knownGood = state['lastKnownGood'];
+      final fallback =
+          allowFallback &&
+              knownGood is String &&
+              knownGood != patchId &&
+              _verifiedBytes(knownGood, state) != null
+          ? _newAttempt(knownGood)
+          : null;
+      // Record the rejected candidate and the fallback's independent attempt
+      // in one transaction. A fallback health check cannot erase the blacklist.
+      state['pending'] = fallback?.patchId;
+      state['pendingAttempt'] = fallback?._token;
+      state['failures'] = 0;
+      _write(state);
+      _ownedBoot = fallback;
+      return (superseded: false, fallback: fallback);
     } on Object {
       return null;
     }

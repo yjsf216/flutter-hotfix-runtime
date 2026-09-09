@@ -26,7 +26,11 @@ final class SignedPatchLoader {
 
   final SignedManifestVerifier verifier;
   late final PatchStore store;
-  void close() => store.close();
+  var _loadGeneration = 0;
+  void close() {
+    _loadGeneration++;
+    store.close();
+  }
 
   bool _verifyStored(String patchId, Uint8List envelope, Uint8List artifact) {
     final verified = verifier.verify(envelope);
@@ -63,25 +67,40 @@ final class SignedPatchLoader {
 
   /// The callback receives the exact bytes rehashed and reauthenticated by the
   /// store. It may load, validate and activate the module. A failed callback
-  /// must undo dispatch changes through [restoreBaseline] before returning null.
-  /// Pending-boot failure evidence survives until the next startup.
+  /// undoes its dispatch changes through [restoreBaseline], durably rejects the
+  /// failed candidate, then tries a reauthenticated distinct LKG at most once.
+  /// Only unexplained process death remains pending for the next startup.
   Future<LoadedPatch<T>?> load<T>(
     Future<T> Function(Uint8List bytes) loadAndValidate, {
     required void Function() restoreBaseline,
   }) async {
-    try {
-      final attempt = store.beginBootAttempt();
-      final bytes = attempt == null
-          ? null
-          : store.readVerified(attempt.patchId);
-      if (attempt != null && bytes != null) {
+    final generation = ++_loadGeneration;
+    var attempt = store.beginBootAttempt();
+    if (attempt == null) {
+      restoreBaseline();
+      return null;
+    }
+    for (var tried = 0; attempt != null && tried < 2; tried++) {
+      try {
+        final bytes = store.readVerified(attempt.patchId);
+        if (bytes == null)
+          throw StateError('selected patch failed revalidation');
         final value = await loadAndValidate(bytes);
         return LoadedPatch._(this, attempt, value);
+      } on Object {
+        // An older callback must not clear a later load's active dispatch.
+        if (generation != _loadGeneration) return null;
+        final rejection = store.rejectBootAndBeginFallback(
+          attempt,
+          allowFallback: tried == 0,
+        );
+        if (rejection?.superseded == true) return null;
+        // Restore outside the protected callback. Broken rollback propagates;
+        // failed rejection persistence returns bundled without loading LKG.
+        restoreBaseline();
+        attempt = rejection?.fallback;
       }
-    } on Object {
-      // Restore outside the catch: a broken rollback must never claim success.
     }
-    restoreBaseline();
     return null;
   }
 
