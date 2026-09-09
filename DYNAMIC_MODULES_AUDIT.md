@@ -72,7 +72,9 @@ forwarding checks for lazy entry, cancellation/finally, exceptions and withdrawa
 Generic methods/top-level functions retain explicit type arguments and are checked
 against per-FunctionId baseline ABI predicates before activation. Their AOT
 corpus includes dependent bounds, nullable values and generic generators.
-It rejects changed layout/signature/defaults, generic classes,
+Same-layout generic-class methods also retain reified class/method arguments,
+typed receivers, nullable fields and covariance checks before patch side effects.
+It rejects changed layout/signature/defaults, constructors and class bounds,
 dynamic private access and lexical super calls before bytecode emission. It
 does not yet implement all Dart constructs or Flutter widget/plugin integration.
 

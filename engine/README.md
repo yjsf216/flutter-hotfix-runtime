@@ -150,3 +150,31 @@ assertion; the signed case must also commit native-store health. Logs and test
 artifacts stay under a unique ignored `work/engine-ddm-check.*` directory.
 Shell syntax and missing-Engine rejection have passed. The four positive/runtime
 cases remain unverified until the actual Engine build completes.
+
+## iOS arm64 cross-build preflight
+
+The same isolated checkout now also generates an iOS **device-architecture**
+release configuration; no device or simulator is contacted or started. From
+`engine/src`:
+
+```sh
+export PATH="$PWD/../../../depot_tools:$PATH"
+export VPYTHON_BYPASS='manually managed python not supported by chrome operations'
+python3 build/mac/darwin_sdk.py --sdk iphoneos --print-paths
+python3 flutter/tools/gn --ios --runtime-mode=release --no-lto \
+  --no-prebuilt-dart-sdk --no-full-dart-sdk --no-build-engine-artifacts \
+  --dart-dynamic-modules --allow-deprecated-api-calls \
+  --target-dir=hotfix_ios_release_arm64 --gn-args=enable_unittests=false
+../../third_party/ninja/ninja -n -C out/hotfix_ios_release_arm64 \
+  flutter/lib/snapshot:generate_snapshot_bins \
+  flutter/shell/platform/darwin/ios:flutter_framework
+```
+
+On 2026-09-09 the installed iPhoneOS 26.5 SDK resolved successfully and GN's
+effective values were `target_os="ios"`, `target_cpu="arm64"`,
+`use_ios_simulator=false`, `flutter_runtime_mode="release"`, and
+`dart_dynamic_modules=true`. The AOT runtime defines include
+`DART_TARGET_OS_MACOS_IOS`, `PRODUCT`, `DART_PRECOMPILED_RUNTIME`, and
+`DART_DYNAMIC_MODULES`. The two official iOS release targets resolve 6,563
+Ninja actions in dry-run mode. Native iOS compilation, linking, signing and
+runtime execution are **not yet verified**; this is not an iOS support claim.

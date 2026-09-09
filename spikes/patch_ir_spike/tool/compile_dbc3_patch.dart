@@ -102,11 +102,6 @@ Future<Map<String, Object?>> _toolIdentity(Directory sdk, Uri platform) async {
 }
 
 void _checkPatchable(Library library) {
-  if (library.classes.any((klass) => klass.typeParameters.isNotEmpty)) {
-    throw const FormatException(
-      'generic class patch lowering is not implemented',
-    );
-  }
   for (final procedure in _methods(library).values) {
     if (procedure.function.body == null) {
       throw FormatException('unsupported patch signature: ${procedure.name}');
@@ -230,11 +225,11 @@ Future<void> compileBaseline({
         ], typeArgument: core.objectNullableRawType),
       ]),
     );
-    if (p.function.typeParameters.isNotEmpty) {
+    if (_patchTypeParameters(p).isNotEmpty) {
       final abi = _patchAbi(p, core);
-      final types = p.function.typeParameters
-          .map(TypeParameterType.withDefaultNullability)
-          .toList();
+      final types = _patchTypeParameters(
+        p,
+      ).map(TypeParameterType.withDefaultNullability).toList();
       patchCall = FunctionInvocation(
         FunctionAccessKind.FunctionType,
         AsExpression(
@@ -525,11 +520,6 @@ Future<void> compilePatch({
     for (final klass in updated.classes)
       klass: baseline.classes.singleWhere((old) => old.name == klass.name),
   };
-  if (classMap.keys.any((klass) => klass.typeParameters.isNotEmpty)) {
-    throw const FormatException(
-      'generic class patch lowering is not implemented',
-    );
-  }
   for (final e in previous.entries) {
     if (next[e.key] == null ||
         functionSignature(e.value) != functionSignature(next[e.key]!)) {
@@ -575,6 +565,8 @@ Future<void> compilePatch({
     implementations[original] = implementation;
   }
   for (final e in implementations.entries) {
+    final classParameters = _classTypeParameters(e.key);
+    final freshClass = getFreshTypeParameters(classParameters);
     final receiver = e.key.isStatic
         ? null
         : VariableDeclaration(
@@ -582,6 +574,7 @@ Future<void> compilePatch({
             type: InterfaceType(
               classMap[e.key.enclosingClass]!,
               Nullability.nonNullable,
+              freshClass.freshTypeArguments,
             ),
           );
     final cloner = _PatchCloner(
@@ -592,18 +585,29 @@ Future<void> compilePatch({
       receiver,
       classMap,
     );
+    cloner.typeSubstitution.addAll(
+      Map.fromIterables(classParameters, freshClass.freshTypeArguments),
+    );
+    for (final parameter in freshClass.freshTypeParameters) {
+      parameter.bound = cloner.visitType(parameter.bound);
+      parameter.defaultType = cloner.visitType(parameter.defaultType);
+    }
     final function = cloner.clone(e.key.function);
+    function.typeParameters.insertAll(0, freshClass.freshTypeParameters);
     if (receiver != null) {
       function.positionalParameters.insert(0, receiver..parent = function);
       function.requiredParameterCount++;
     }
     e.value.function = function..parent = e.value;
+    for (final parameter in freshClass.freshTypeParameters) {
+      parameter.declaration = e.value;
+    }
   }
   final exports = <MapLiteralEntry>[];
   for (final e in implementations.entries) {
     final old = previous[_key(e.key)];
     if (old == null) continue; // New helpers remain private to this module.
-    if (e.key.function.typeParameters.isNotEmpty) {
+    if (_patchTypeParameters(e.key).isNotEmpty) {
       exports.add(
         MapLiteralEntry(
           StringLiteral(ids[old]!),
@@ -764,7 +768,8 @@ class _CandidateFileSystem implements front_end_fs.FileSystem {
 }
 
 FunctionType _patchAbi(Procedure procedure, CoreTypes core) {
-  if (procedure.function.typeParameters.isEmpty) {
+  final parameters = _patchTypeParameters(procedure);
+  if (parameters.isEmpty) {
     return FunctionType(
       [
         core.objectNullableRawType,
@@ -776,21 +781,48 @@ FunctionType _patchAbi(Procedure procedure, CoreTypes core) {
       Nullability.nonNullable,
     );
   }
-  final type = procedure.function.computeFunctionType(Nullability.nonNullable);
+  // Class and method binders form one scope: e.g. <T, U extends T>.
+  final fresh = getFreshStructuralParametersFromTypeParameters(parameters);
+  DartType substitute(DartType type) => fresh.substitution.substituteType(type);
   return FunctionType(
     [
       if (!procedure.isStatic)
-        InterfaceType(procedure.enclosingClass!, Nullability.nonNullable),
-      ...type.positionalParameters,
+        substitute(
+          InterfaceType(
+            procedure.enclosingClass!,
+            Nullability.nonNullable,
+            _classTypeParameters(
+              procedure,
+            ).map(TypeParameterType.withDefaultNullability).toList(),
+          ),
+        ),
+      for (final parameter in procedure.function.positionalParameters)
+        substitute(parameter.type),
     ],
-    type.returnType,
+    substitute(procedure.function.returnType),
     Nullability.nonNullable,
-    typeParameters: type.typeParameters,
-    namedParameters: type.namedParameters,
+    typeParameters: fresh.freshTypeParameters,
+    namedParameters: [
+      for (final parameter in procedure.function.namedParameters)
+        NamedType(
+          parameter.name!,
+          substitute(parameter.type),
+          isRequired: parameter.isRequired,
+        ),
+    ]..sort(),
     requiredParameterCount:
-        type.requiredParameterCount + (procedure.isStatic ? 0 : 1),
+        procedure.function.requiredParameterCount +
+        (procedure.isStatic ? 0 : 1),
   );
 }
+
+List<TypeParameter> _classTypeParameters(Procedure procedure) =>
+    procedure.isStatic ? const [] : procedure.enclosingClass!.typeParameters;
+
+List<TypeParameter> _patchTypeParameters(Procedure procedure) => [
+  ..._classTypeParameters(procedure),
+  ...procedure.function.typeParameters,
+];
 
 String _key(Procedure p) =>
     '${p.enclosingClass?.name ?? ''}::${p.kind.name}::${p.name.text}';

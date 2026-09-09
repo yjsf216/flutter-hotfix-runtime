@@ -9,10 +9,10 @@ Future<void> main(List<String> args) async {
   try {
     final cases = [
       (
-        'generic-class',
-        'class A<T> { T f(T value) => value; }',
-        'class A<T> { T f(T value) { return value; } }',
-        'generic class patch lowering is not implemented',
+        'generic-class-layout',
+        'class A<T> { T value; A(this.value); T f() => value; }',
+        'class A<T> { T value; int extra = 0; A(this.value); T f() => value; }',
+        'incompatible Kernel library',
       ),
       (
         'generator-to-eager',

@@ -49,7 +49,7 @@ PASS: ordinary Dart -> automatic patch points -> P-256 signed DBC3/store -> base
 PASS: forged generated patch manifest -> bundled baseline
 PASS: generated field/closure/named/optional/async/exception/nested-call patch + rollback
 PASS: incompatible source changes rejected before DBC3 emission
-PASS: CFE rejects generic-class before bytecode emission
+PASS: CFE rejects generic-class-layout before bytecode emission
 PASS: CFE rejects private-dynamic before bytecode emission
 PASS: CFE rejects private-symbol before bytecode emission
 PASS: CFE rejects super before bytecode emission
@@ -82,13 +82,23 @@ Kernel type-argument invocation from the baseline. A generated per-FunctionId
 ABI predicate rejects wrong arity/bounds/named/optional/return shapes before
 dispatch replacement. Real AOT checks cover nullable arguments, two
 dependent type parameters, AOT callbacks, generic `sync*`/`Future<T>` and rollback;
-incompatible export shapes preserve the previously active table. Generic classes
-remain unsupported and changes to existing bounds/signatures fail compilation.
+incompatible export shapes preserve the previously active table. Changes to
+existing bounds/signatures fail compilation.
 
 The generic async case also preserves nullable `T` after `await`, the original
 exception object/stack from an AOT callback, and in-flight completion across
 withdrawal while subsequent calls return to baseline. Wrong Future return ABIs
 are rejected at activation and incompatible source return types at compilation.
+
+Same-layout generic classes now lift class parameters into the generated static
+patch signature, before method parameters, while preserving `Box<T>` receivers.
+The real AOT corpus changes four methods and verifies int/double/nullable
+instantiations, `U extends T`, private field reads/writes, unchanged AOT helpers
+and callbacks, atomic ABI rejection, and withdrawal. Widening `Box<int>` to
+`Box<num>` still rejects invalid values and method type arguments before patch
+side effects. Incorrect receiver instantiations and lifted bounds also fail.
+Field type/layout, constructor-body, class-bound and covariance changes are
+rejected before bytecode emission.
 
 PatchStore now rejects ID overwrites and blacklisted reinstalls, preserves
 failure accounting and LKG, bounds all file reads and returns the exact buffer

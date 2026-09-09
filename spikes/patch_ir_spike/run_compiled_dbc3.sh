@@ -62,6 +62,8 @@ echo 'PASS: frozen release -> signed patch -> native transactional store -> exis
   "$spike_dir/tool/generator_check.dart" "$sdk_dir"
 "$dart_bin" --packages="$sdk_dir/.dart_tool/package_config.json" \
   "$spike_dir/tool/generic_check.dart" "$sdk_dir"
+"$dart_bin" --packages="$sdk_dir/.dart_tool/package_config.json" \
+  "$spike_dir/tool/generic_class_check.dart" "$sdk_dir"
 
 for incompatible in field_changed signature_changed; do
   if rejection=$(HOTFIX_TEST_PUBLIC_KEY="$public_key" "$dart_bin" \

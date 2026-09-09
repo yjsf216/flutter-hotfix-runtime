@@ -92,32 +92,6 @@ $_entry
       }
       print('PASS: generic $name change rejected before bytecode emission');
     }
-    business.writeAsStringSync(
-      'class Unsupported<T> { T echo(T value) => value; }',
-    );
-    entry.writeAsStringSync('''
-import '${business.uri}';
-import '${spike.uri.resolve('dbc3_dispatch.dart')}';
-void main() {}
-''');
-    final genericClass = Directory('${root.path}/generic-class');
-    var rejectedClass = false;
-    try {
-      await compiler.compileBaseline(
-        sdk: sdk,
-        baselineUri: business.uri,
-        entryUri: entry.uri,
-        output: genericClass,
-      );
-    } on FormatException catch (error) {
-      if (!error.message.contains('generic class')) rethrow;
-      rejectedClass = true;
-    }
-    if (!rejectedClass ||
-        File('${genericClass.path}/release.json').existsSync()) {
-      throw StateError('unsupported generic class was frozen as a release');
-    }
-    print('PASS: generic class remains rejected');
   } finally {
     temporary.deleteSync(recursive: true);
   }
