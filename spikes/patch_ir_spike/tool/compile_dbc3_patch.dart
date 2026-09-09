@@ -107,21 +107,18 @@ void _checkPatchable(Library library) {
     );
   }
   for (final procedure in _methods(library).values) {
-    if ({
-          AsyncMarker.SyncStar,
-          AsyncMarker.AsyncStar,
-        }.contains(procedure.function.dartAsyncMarker) ||
-        {
-          AsyncMarker.SyncStar,
-          AsyncMarker.AsyncStar,
-        }.contains(procedure.function.asyncMarker)) {
-      throw const FormatException(
-        'generator patch points require yield forwarding',
-      );
-    }
     if (procedure.function.typeParameters.isNotEmpty ||
         procedure.function.body == null) {
       throw FormatException('unsupported patch signature: ${procedure.name}');
+    }
+    final function = procedure.function;
+    if ({
+          AsyncMarker.SyncStar,
+          AsyncMarker.AsyncStar,
+        }.contains(function.dartAsyncMarker) &&
+        (function.asyncMarker != function.dartAsyncMarker ||
+            function.emittedValueType == null)) {
+      throw const FormatException('generator Kernel markers are not intact');
     }
   }
 }
@@ -230,7 +227,19 @@ Future<void> compileBaseline({
         ], typeArgument: core.objectNullableRawType),
       ]),
     );
-    final patchedReturn = p.function.returnType is VoidType
+    final generator = {
+      AsyncMarker.SyncStar,
+      AsyncMarker.AsyncStar,
+    }.contains(p.function.dartAsyncMarker);
+    final patchedReturn = generator
+        ? Block([
+            YieldStatement(
+              AsExpression(patchCall, p.function.returnType),
+              isYieldStar: true,
+            ),
+            ReturnStatement(),
+          ])
+        : p.function.returnType is VoidType
         ? Block([ExpressionStatement(patchCall), ReturnStatement()])
         : ReturnStatement(AsExpression(patchCall, p.function.returnType));
     p.function.body = Block([
@@ -471,24 +480,8 @@ Future<void> compilePatch({
       throw FormatException('existing method signature changed: ${e.key}');
     }
   }
-  for (final procedure in [...previous.values, ...next.values]) {
-    if ({
-          AsyncMarker.SyncStar,
-          AsyncMarker.AsyncStar,
-        }.contains(procedure.function.dartAsyncMarker) ||
-        {
-          AsyncMarker.SyncStar,
-          AsyncMarker.AsyncStar,
-        }.contains(procedure.function.asyncMarker)) {
-      throw const FormatException(
-        'generator patch points require yield forwarding',
-      );
-    }
-    if (procedure.function.typeParameters.isNotEmpty ||
-        procedure.function.body == null) {
-      throw FormatException('unsupported patch signature: ${procedure.name}');
-    }
-  }
+  _checkPatchable(baseline);
+  _checkPatchable(updated);
   final changed = <Procedure>[];
   for (final e in next.entries) {
     final old = previous[e.key];

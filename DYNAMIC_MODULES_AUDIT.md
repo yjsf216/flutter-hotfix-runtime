@@ -67,7 +67,9 @@ it authenticated. Health is committed after functional checks.
 
 This automated corpus covers same-layout field access/mutation, closures,
 named and optional arguments, async, exceptions, nested retained AOT calls and
-dispatch rollback. It rejects changed layout/signature/defaults, generators,
+dispatch rollback. Ordinary `sync*`/`async*` methods also pass native `yield*`
+forwarding checks for lazy entry, cancellation/finally, exceptions and withdrawal.
+It rejects changed layout/signature/defaults, generic generators,
 dynamic private access and lexical super calls before bytecode emission. It
 does not yet implement all Dart constructs or Flutter widget/plugin integration.
 

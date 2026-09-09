@@ -49,7 +49,7 @@ PASS: ordinary Dart -> automatic patch points -> P-256 signed DBC3/store -> base
 PASS: forged generated patch manifest -> bundled baseline
 PASS: generated field/closure/named/optional/async/exception/nested-call patch + rollback
 PASS: incompatible source changes rejected before DBC3 emission
-PASS: CFE rejects generator before bytecode emission
+PASS: CFE rejects generic-generator before bytecode emission
 PASS: CFE rejects private-dynamic before bytecode emission
 PASS: CFE rejects private-symbol before bytecode emission
 PASS: CFE rejects super before bytecode emission
@@ -69,6 +69,13 @@ death still leaves pending-boot evidence for the original failure threshold.
 The compiler explicitly retains private baseline members, because upstream
 library-wide dynamic-interface annotation skips them. The language fixture
 reads a private field and calls a private AOT method unused in the baseline.
+
+Ordinary `sync*` and `async*` methods now get generated `yield*` entry forwarding.
+The real AOT generator check changes only two generator bodies while retaining
+five automatic patch points. It verifies delayed execution, repeat iteration,
+unchanged AOT helpers and `yield*` chains, exception/finally behavior, async early
+cancellation and withdrawal: started generators finish their selected body while
+later entries return to baseline. Generic generators remain explicitly rejected.
 
 PatchStore now rejects ID overwrites and blacklisted reinstalls, preserves
 failure accounting and LKG, bounds all file reads and returns the exact buffer

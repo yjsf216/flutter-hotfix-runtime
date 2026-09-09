@@ -21,7 +21,10 @@ It requires the pinned dynamic-enabled Dart source build under `work/upstream`.
 Compiler-side tools use that SDK's workspace package config. Business fixtures
 are ordinary Dart; Runtime setup belongs to the application entry point.
 Unsupported shapes are rejected, including changed layout/signature/defaults,
-generic methods/classes, generators, dynamic calls and lexical `super` calls.
+generic methods/classes, dynamic calls and lexical `super` calls.
+Ordinary `sync*`/`async*` methods use generated `yield*` forwarding: checks cover
+lazy entry, independent iteration, nested AOT calls, exception/finally handling,
+early cancellation and withdrawal during an already-started generator.
 URI-based `part of` libraries are supported without rewriting business source:
 the frozen Kernel library is temporarily renamed in memory, while CFE sees the
 candidate's real logical URI. Module identity hashes the actual source bundle,

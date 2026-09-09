@@ -9,10 +9,22 @@ Future<void> main(List<String> args) async {
   try {
     final cases = [
       (
-        'generator',
+        'generic-generator',
+        'class A { Iterable<T> f<T>(T value) sync* { yield value; } }',
+        'class A { Iterable<T> f<T>(T value) sync* { yield value; yield value; } }',
+        'unsupported patch signature',
+      ),
+      (
+        'generator-to-eager',
         'class A { Iterable<int> f() sync* { yield 1; } }',
+        'class A { Iterable<int> f() => [2]; }',
+        'incompatible Kernel library',
+      ),
+      (
+        'eager-to-generator',
+        'class A { Iterable<int> f() => [1]; }',
         'class A { Iterable<int> f() sync* { yield 2; } }',
-        'generator patch points',
+        'incompatible Kernel library',
       ),
       (
         'private-dynamic',

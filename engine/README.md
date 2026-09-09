@@ -36,9 +36,18 @@ updates. These clones depend on the source Git object stores remaining available
 Source dependency synchronization is in progress; Engine compilation and linking
 are **not yet verified**.
 
+Five additional Engine dependencies were seeded from local Git objects with exact
+revision checks: BoringSSL, protobuf, libc++, libc++abi and LLVM libc. The existing
+Dart ICU checkout does **not** contain the Engine's pinned ICU revision and is
+not reused. `seed_shared_deps.sh` repeats these checks/seeds and refuses to replace
+existing mismatched repositories. Run it before a source sync.
+
 ## Reproduction and next gate
 
-Start from isolated checkouts at the revisions above. Place the Dart checkout
+Start from isolated checkouts at the revisions above. If using a sparse Flutter
+checkout, include `engine`, `bin` and `third_party` before installing build tools;
+expanding sparse rules later may remove ignored tools outside those rules.
+Place the Dart checkout
 and its resolved dependencies at `engine/src/flutter/third_party/dart`, then
 copy `host-ddm.gclient` to the isolated Flutter checkout as `.gclient`. The
 configuration intentionally excludes Android SDK, web, Fuchsia, remote builds
@@ -56,9 +65,56 @@ The separate source pass avoids downloading every CIPD payload while disk space
 is constrained. Install only the pinned host Clang from `host-clang.ensure`;
 resolve additional build tools from the exact DEPS/SDK hook requirements as GN
 reports them. Do not run all hooks blindly or substitute the stock Flutter
-runtime. Track the live sync process and free space before proceeding.
+runtime. Track the live sync process and free space before proceeding. Range
+probes confirmed `NO_PROXY=storage.googleapis.com,commondatastorage.googleapis.com`
+can be used with the authorized HTTPS proxy for CIPD metadata, keeping binary
+storage requests direct when that route is reachable.
+
+The pinned GN and Ninja binaries have been installed and executed successfully:
+
+| Tool | DEPS version | Immutable CIPD instance |
+|---|---|---|
+| GN | `81b24e01531ecf0eff12ec9359a555ec3944ec4e` | `UOt3zTOpG3ypEYMIj8Lmy9zIq5S8Jz25Si_ZVNLFy9oC` |
+| Ninja | `2@1.11.1.chromium.4` | `ZFhjI422FVlCuVtH2KwXAzLNQ5UdS8j4kk7rGjDoxyMC` |
+
+For the actual AOT gate use the release embedder target, not `flutter_tester`:
+the latter directly depends on `libdart_jit`. The embedder instead uses
+`flutter/runtime:libdart`, which selects the AOT runtime in release mode.
+The first GN preflight reached repository-version validation and correctly
+stopped at the not-yet-synced Skia source; it did not generate a complete build.
 
 The next proof is an actual release Engine with `dart_dynamic_modules=true`
 loading the repository's signed Widget DBC3 through Flutter, then target-specific
 Android/iOS/OHOS builds. Source preparation, archive probes and a standalone Dart
 VM must not be reported as that proof.
+
+## Headless AOT harness (header gate passed, Engine execution pending)
+
+`sh engine/check_headless_runner.sh` compiles `headless_aot_smoke.cc` against the
+pinned C API header, checks that no Engine function is statically linked, and
+rejects missing/unrelated libraries. This is a host compiler/loader-boundary
+check, not a mocked Engine test or proof of DDM support.
+
+Build target: `//flutter/shell/platform/embedder:flutter_engine`. The macOS
+release binary is `out/<config>/FlutterEmbedder.framework/Versions/A/FlutterEmbedder`,
+with `icudtl.dat` under `Versions/A/Resources`. After that build succeeds:
+
+```text
+headless_aot_smoke ENGINE_LIBRARY AOT_ELF ASSETS ICU TIMEOUT_SECONDS [DART_ARGS...]
+```
+
+The runner requires `RunsAOTCompiledDartCode`, initializes AOT ELF data, provides a
+platform task queue and a 320×240 software surface, and enforces bounded timeouts
+including native shutdown. Dart must send raw UTF-8 `PASS` (or `FAIL:<detail>`)
+on `hotfix/runtime-smoke`; a genuine surface callback must also occur before
+success. Frame FNV fingerprints are diagnostic, not cryptographic. The eventual
+Dart fixture must independently assert signed-patch semantics; a PASS message
+and a frame alone do not prove that the expected widget was patched.
+
+The `flutter_compiled/main.dart` fixture is now wired to this protocol: after
+`endOfFrame` it inspects the mounted `Text` child, checks baseline versus patched
+content, and only then acknowledges signed-patch health and reports success.
+No Dart arguments select baseline; three arguments select a signed patch; an
+optional fourth `expect-baseline` argument supports a rejection case with a fresh
+store. Its CFE/AOT artifact compilation is checked, but this complete fixture
+has not yet been executed inside the new Engine.
