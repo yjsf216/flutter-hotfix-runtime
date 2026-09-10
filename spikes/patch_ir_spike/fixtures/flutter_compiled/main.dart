@@ -13,15 +13,21 @@ Future<void> main(List<String> arguments) async {
     StringCodec(),
   );
   try {
+    final auto = arguments.length == 4 && arguments.last == 'auto';
     if (arguments.isNotEmpty &&
         arguments.length != 3 &&
-        !(arguments.length == 4 && arguments.last == 'expect-baseline')) {
-      throw ArgumentError('module, manifest, store [expect-baseline] required');
+        !(arguments.length == 4 &&
+            (arguments.last == 'expect-baseline' || auto))) {
+      throw ArgumentError(
+        'module, manifest, store [expect-baseline|auto] required',
+      );
     }
-    final expectBaseline = arguments.isEmpty || arguments.length == 4;
     final patch = arguments.isEmpty
         ? null
         : await bootSignedModule(arguments.take(3).toList());
+    final expectBaseline = auto
+        ? patch == null
+        : arguments.isEmpty || arguments.length == 4;
     if (expectBaseline != (patch == null)) {
       throw StateError('unexpected signed-patch activation result');
     }

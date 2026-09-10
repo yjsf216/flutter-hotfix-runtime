@@ -1,7 +1,9 @@
 # Actual host Flutter Engine AOT/DBC3 evidence
 
-The real software-surface Engine gate passed. This is **not** Android, iOS or
-OHOS execution evidence, and no connected device or simulator was used.
+The real software-surface Engine gate passed. This host gate used no device or
+simulator. Subsequent authorized Android execution is documented separately in
+[Android device evidence](../spikes/android_spike/DEVICE_EVIDENCE.md); iOS/OHOS
+execution remains unverified.
 
 Run from the repository root:
 
@@ -99,5 +101,6 @@ b1a40f3f889feda8e6b7afc603f9ffe80c357a7eed04ac0adf4d45788262c15e
 
 The baseline and signed patch inputs come from `work/android-release-check.qft7KT`.
 The APK packages the baseline/runtime, not an automatically applied downloaded
-patch. Application-side patch acquisition/bootstrap and actual Android execution
-remain unverified. The APK was not installed or launched on any device.
+patch. That original packaging-only APK was not installed or launched. A later
+development APK connects startup and passes the authorized Android device matrix
+linked above; remote patch acquisition remains unverified.

@@ -1,3 +1,6 @@
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE 1
+#endif
 #define _POSIX_C_SOURCE 200809L
 #define _DARWIN_C_SOURCE 1
 #define _DEFAULT_SOURCE 1
@@ -32,21 +35,64 @@ static int component(const char *start, size_t size) {
          !memchr(start, '\\', size);
 }
 
+static int open_search_directory(int parent, const char *name) {
+#if defined(__linux__)
+  int fd = openat(parent, name,
+                  O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  return fd < 0 ? -errno : fd;
+#else
+  (void)parent;
+  (void)name;
+  return -EACCES;
+#endif
+}
+
+static int sync_directory_fd(int fd) {
+  int error = sync_fd(fd);
+#if defined(__linux__)
+  if (error == -EBADF) {
+    int readable = openat(fd, ".",
+                          O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (readable < 0) return -errno;
+    error = sync_fd(readable);
+    if (close(readable) < 0 && !error) error = -errno;
+  }
+#endif
+  return error;
+}
+
 static int open_directory(int parent, const char *name, int create) {
   int fd = openat(parent, name,
                   O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-  if (fd >= 0 || !create || errno != ENOENT)
-    return fd < 0 ? -errno : fd;
+  if (fd >= 0) return fd;
+  if (errno == EACCES) return open_search_directory(parent, name);
+  if (!create || errno != ENOENT) return -errno;
   if (mkdirat(parent, name, 0700) < 0 && errno != EEXIST) return -errno;
   fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (fd < 0) return -errno;
-  int error = sync_fd(fd);
-  if (!error) error = sync_fd(parent);
+  int error = sync_directory_fd(fd);
+  if (!error) error = sync_directory_fd(parent);
   if (error) {
     close(fd);
     return error;
   }
   return fd;
+}
+
+static int readable_directory_fd(int fd) {
+#if defined(__linux__)
+  int readable = openat(fd, ".",
+                        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (readable < 0) {
+    int error = -errno;
+    close(fd);
+    return error;
+  }
+  close(fd);
+  return readable;
+#else
+  return fd;
+#endif
 }
 
 /* Owns a duplicate descriptor; each new directory is opened relative to the
@@ -73,7 +119,7 @@ static int walk_directories(int root, const char *path, size_t length,
     fd = next;
     offset = end + 1;
   }
-  return fd;
+  return readable_directory_fd(fd);
 }
 
 static int path_length(const char *path, size_t *length) {
@@ -109,8 +155,8 @@ int psio_open_root(const char *path, int create) {
   size_t length;
   int error = path_length(path + 1, &length);
   if (error) return error;
-  int base = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (base < 0) return -errno;
+  int base = open_directory(AT_FDCWD, "/", 0);
+  if (base < 0) return base;
   int root = walk_directories(base, path + 1, length, create);
   close(base);
   if (root < 0) return root;

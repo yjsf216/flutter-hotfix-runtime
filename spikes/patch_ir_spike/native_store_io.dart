@@ -102,6 +102,7 @@ final class NativeStoreIo {
   }
 
   void _check(int result, String operation) {
+    if (result < 0) print('HotfixNative $operation: errno=${-result}, root=${root.path}');
     if (result < 0)
       throw FileSystemException(
         'native $operation',

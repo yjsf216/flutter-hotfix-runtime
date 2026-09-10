@@ -79,7 +79,8 @@ android {
 
     buildTypes {
         release {
-            // Host-built development APK only; no production signing key here.
+            // Development validation only; Dart remains native Release/AOT.
+            isDebuggable = true
             signingConfig = signingConfigs.getByName("debug")
         }
     }

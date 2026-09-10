@@ -52,7 +52,8 @@ Future<LoadedPatch<void>?> bootSignedModule(List<String> paths) async {
     return await _loader.load<void>((bytes) async {
       activateModule(await loadModuleFromBytes(bytes));
     }, restoreBaseline: deactivateModule);
-  } on Object {
+  } on Object catch (error) {
+    print('HotfixBootstrap initialization failed: $error');
     deactivateModule();
     return null;
   }

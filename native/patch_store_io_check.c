@@ -32,6 +32,33 @@ static void wait_success(pid_t child) {
   assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
+#if defined(__linux__)
+static void check_search_only_ancestor(const char *root_path) {
+  if (geteuid() == 0) {
+    puts("SKIP: search-only ancestor regression requires a non-root UID");
+    return;
+  }
+  char parent_path[4096];
+  size_t length = strnlen(root_path, sizeof(parent_path));
+  assert(length > 0 && length < sizeof(parent_path));
+  memcpy(parent_path, root_path, length + 1);
+  char *slash = strrchr(parent_path, '/');
+  assert(slash && slash != parent_path);
+  *slash = '\0';
+  assert(chmod(parent_path, 0100) == 0);
+  int denied = open(parent_path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  assert(denied < 0 && errno == EACCES);
+  int opened = psio_open_root(root_path, 0);
+  assert(chmod(parent_path, 0700) == 0);
+  assert(opened >= 0);
+  assert(psio_lock(opened) == 0 && psio_unlock(opened) == 0);
+  write_value(opened, "ancestor-check", "ok");
+  expect_value(opened, "ancestor-check", "ok");
+  assert(psio_close(opened) == 0);
+  puts("PASS: Linux search-only ancestor traversal uses an O_PATH pin");
+}
+#endif
+
 static void check_paths(int root, const char *root_path) {
   const char *invalid[] = {"", "/etc/passwd", ".", "..", "x/../state",
                             "x/./state", "x//state", "x/", "x\\state"};
@@ -205,6 +232,9 @@ int main(int argc, char **argv) {
   alarm(30);
   int root = psio_open_root(argv[1], 1);
   assert(root >= 0);
+#if defined(__linux__)
+  check_search_only_ancestor(argv[1]);
+#endif
   check_paths(root, argv[1]);
   check_transactions(root, argv[1]);
   check_atomic_reads(root, argv[1]);
