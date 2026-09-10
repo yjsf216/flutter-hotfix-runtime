@@ -2,6 +2,9 @@
 
 Every phase ends in a continue/stop decision. Passing source review or an emulator is not platform support.
 
+Current delivery priority: Android and iOS. OHOS is deferred at the user's request;
+its remaining requirements are retained below, not reported as completed.
+
 ## M0 — contract and reproducibility (now)
 
 - Pin Flutter 3.41.9 / Dart 3.11.5 / Engine `42d3d75a56` for Android and iOS research.
@@ -33,7 +36,7 @@ Every phase ends in a continue/stop decision. Passing source review or an emulat
 - Run the complete upstream dynamic-module AOT semantic suite. **Passed:** 38/38, zero failure logs.
 - Cross-compile the dynamic-enabled standalone VM. **Android arm64 passed; iOS core objects passed but the non-Engine command-line target has an export-list link conflict.**
 - Reuse Flutter Engine's existing DDM GN/CI route. **Confirmed:** pinned 3.41.9 already defines Android and iOS DDM builders and archives; no new flag plumbing is needed.
-- **Actual host Engine built:** the pinned release embedder compiles and links after tracked host-compiler path fixes. Its software-surface configuration excludes offline Metal compilation without changing mobile requirements. iOS arm64 DDM/AOT configuration and official-target dependency preflight pass. Android arm64 configuration and a canary ELF compile also pass; its complete native build is underway. Mobile Engine linking/execution remain unverified.
+- **Actual host Engine built:** the pinned release embedder compiles and links after tracked host-compiler path fixes. Its software-surface configuration excludes offline Metal compilation without changing mobile requirements. iOS arm64 DDM/AOT configuration and official-target dependency preflight pass. Android arm64 Engine and its host snapshot generator now link; that generator compiles the frozen Flutter baseline and Widget DBC3 patch. The generator's actual bytes are version-bound and rechecked during patch compilation. Android packaging/execution and full iOS Engine linking/execution remain unverified.
 - **Actual AOT embedder gate passed:** four real Engine processes verify baseline Text, signed patched Text, forged-signature fallback and correctly signed baseline-mismatch fallback, each with a genuine software frame. Bootstrap defers the first frame; health waits for the validated Widget's first rasterization before committing durable LKG. Rejected cases persist no patch artifact. See [Engine evidence](engine/EVIDENCE.md). `flutter_tester` is excluded because it explicitly links the JIT runtime; this host gate does not establish mobile execution.
 - Join verification/storage with the real loader. **Passed:** identity, length and digest gate → atomic store → pending boot → rehash → DBC3 activation → healthy commit; tampering stays baseline.
 - **Real authentication passed:** OpenSSL P-256 signatures verified inside AOT with embedded keys, complete release identity and independently compiled baseline fingerprint. Startup reauthenticates the stored manifest and the exact bytes returned to the loader; state+artifact+manifest forgery is rejected.

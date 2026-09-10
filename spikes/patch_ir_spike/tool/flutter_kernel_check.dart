@@ -10,13 +10,21 @@ import 'compile_dbc3_patch.dart' as compiler;
 
 /// Real Flutter frontend/DBC3 artifact check. Engine execution is a separate gate.
 Future<void> main(List<String> arguments) async {
-  if (arguments.length != 3) {
+  if (arguments.length != 3 && arguments.length != 4) {
     throw ArgumentError(
-      'usage: flutter_kernel_check sdk-source flutter-sdk output',
+      'usage: flutter_kernel_check sdk-source flutter-sdk output [gen-snapshot]',
     );
   }
   final sdk = Directory(arguments[0]).absolute;
   final flutter = Directory(arguments[1]).absolute;
+  final genSnapshot = File(
+    arguments.length == 4
+        ? arguments[3]
+        : '${sdk.path}/xcodebuild/ReleaseARM64/gen_snapshot_product',
+  ).absolute;
+  if (!genSnapshot.existsSync()) {
+    throw StateError('selected gen_snapshot missing: ${genSnapshot.path}');
+  }
   final output = Directory(arguments[2]).absolute..createSync(recursive: true);
   final spike = File.fromUri(Platform.script).parent.parent;
   final fixture = Directory('${spike.path}/fixtures/flutter_compiled');
@@ -58,6 +66,7 @@ Future<void> main(List<String> arguments) async {
     targetName: 'flutter',
     platformDillUri: platform.uri,
     packagesFileUri: packagesFile.uri,
+    genSnapshotUri: genSnapshot.uri,
     retainedLibraries: {
       Uri.parse('dart:ui'),
       Uri.parse('package:flutter/src/widgets/framework.dart'),
@@ -70,7 +79,7 @@ Future<void> main(List<String> arguments) async {
   };
   final snapshot = File('${output.path}/baseline.snapshot');
   final aotBuild = await Process.run(
-    '${sdk.path}/xcodebuild/ReleaseARM64/gen_snapshot_product',
+    genSnapshot.path,
     [
       '--snapshot-kind=app-aot-elf',
       '--elf=${snapshot.path}',
@@ -88,6 +97,7 @@ Future<void> main(List<String> arguments) async {
     output: patch,
     platformDillUri: platform.uri,
     packagesFileUri: packagesFile.uri,
+    genSnapshotUri: genSnapshot.uri,
   );
   for (final entry in frozenFiles.entries) {
     _require(
@@ -156,6 +166,9 @@ Future<void> main(List<String> arguments) async {
   File('${output.path}/flutter-evidence.json').writeAsStringSync(
     const JsonEncoder.withIndent('  ').convert({
       'target': 'flutter',
+      'genSnapshotPath': genSnapshot.path,
+      'genSnapshotSha256': (await sha256.bind(genSnapshot.openRead()).first)
+          .toString(),
       'platform': platform.path,
       'platformSha256': sha256.convert(platform.readAsBytesSync()).toString(),
       'baselineFlutterLibraries': baseline.libraries

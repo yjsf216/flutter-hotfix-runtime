@@ -57,6 +57,8 @@ echo 'PASS: frozen release -> signed patch -> native transactional store -> exis
 "$dart_bin" --packages="$sdk_dir/.dart_tool/package_config.json" \
   "$spike_dir/tool/frozen_release_check.dart" "$sdk_dir" "$test_dir/libpatch_store_io.dylib"
 "$dart_bin" --packages="$sdk_dir/.dart_tool/package_config.json" \
+  "$spike_dir/tool/target_toolchain_check.dart" "$sdk_dir"
+"$dart_bin" --packages="$sdk_dir/.dart_tool/package_config.json" \
   "$spike_dir/tool/relative_import_check.dart" "$sdk_dir"
 "$dart_bin" --packages="$sdk_dir/.dart_tool/package_config.json" \
   "$spike_dir/tool/generator_check.dart" "$sdk_dir"

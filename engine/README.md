@@ -231,8 +231,18 @@ Effective GN values confirm Android/arm64/release/DDM. The runtime defines inclu
 `DART_TARGET_OS_ANDROID`, `DART_COMPRESSED_POINTERS`, `DART_DYNAMIC_MODULES`,
 `PRODUCT` and `DART_PRECOMPILED_RUNTIME`. The selected targets resolve 5,603
 actions, producing `libflutter.so` and `artifacts_arm64/gen_snapshot_arm64`.
-A canary compile of `obj/flutter/fml/command_line.command_line.o` has executed
-successfully and produced an AArch64 ELF object. Full native linking, matching
-snapshot generation, APK integration and target execution are still unverified.
+The full native build has now linked successfully (log:
+`work/engine-android-build.Ca7OvA`). `lib.stripped/libflutter.so` is an AArch64 ELF
+with 64 KiB LOAD alignment; `artifacts_arm64/gen_snapshot_arm64` is a host macOS
+arm64 executable targeting the Android snapshot configuration, not an Android
+program run on the host.
+
+The target generator has produced a frozen Flutter baseline and a 1,408-byte
+Widget DBC3 patch in `work/android-release-check.qft7KT`. Its
+`artifacts/flutter-evidence.json` records the selected generator SHA-256 and
+unchanged release files. Reproduce with `GEN_SNAPSHOT` pointing to the target
+generator when calling `spikes/patch_ir_spike/run_flutter_kernel.sh`; do not use
+this Android snapshot as input to the host Engine runner. APK integration and
+target execution remain separate gates.
 Full Java/archive builds additionally need the pinned OpenJDK and Android
 embedding dependencies; the native preflight does not claim those are installed.

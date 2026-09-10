@@ -16,6 +16,12 @@ after both the business source and dependency sources change on disk.
 `StatelessWidget.build` with the real product `dart:ui` platform into a retained
 baseline AOT snapshot and one DBC3 module. It checks frozen-release integrity;
 it does not launch a Flutter Engine or claim rendered output.
+Set `GEN_SNAPSHOT=/absolute/path/to/target/gen_snapshot` to compile with a target
+generator. The same binary is passed to both release/patch identity checks and
+the actual AOT generation step. Its SHA-256, not its location, is frozen into
+the release; missing tools or different bytes cannot silently use the host
+default. `tool/target_toolchain_check.dart` checks relocation, mismatch rejection
+and unchanged frozen artifacts. An explicitly empty `GEN_SNAPSHOT` is rejected.
 Separately, `sh engine/run_host_ddm.sh` from the repository root has passed the
 [actual AOT Engine software-frame gate](../../engine/EVIDENCE.md), including signed
 Widget replacement and negative-input fallback. Mobile execution remains pending.

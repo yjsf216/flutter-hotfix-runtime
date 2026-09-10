@@ -82,7 +82,11 @@ ErrorDetector _errors() => ErrorDetector(
 Future<String> _digestFile(File file) async =>
     (await sha256.bind(file.openRead()).first).toString();
 
-Future<Map<String, Object?>> _toolIdentity(Directory sdk, Uri platform) async {
+Future<Map<String, Object?>> _toolIdentity(
+  Directory sdk,
+  Uri platform, {
+  Uri? genSnapshotUri,
+}) async {
   final spike = File.fromUri(Platform.script).parent.parent;
   return {
     'compilerSources': {
@@ -94,7 +98,10 @@ Future<Map<String, Object?>> _toolIdentity(Directory sdk, Uri platform) async {
         name: await _digestFile(File('${spike.path}/tool/$name')),
     },
     'genSnapshotSha256': await _digestFile(
-      File('${sdk.path}/xcodebuild/ReleaseARM64/gen_snapshot_product'),
+      File.fromUri(
+        genSnapshotUri ??
+            sdk.uri.resolve('xcodebuild/ReleaseARM64/gen_snapshot_product'),
+      ),
     ),
     'platformSha256': await _digestFile(File.fromUri(platform)),
     'snapshotKind': 'app-aot-elf',
@@ -126,6 +133,7 @@ Future<void> compileBaseline({
   String targetName = 'vm',
   Uri? platformDillUri,
   Uri? packagesFileUri,
+  Uri? genSnapshotUri,
   Set<Uri> retainedLibraries = const {},
   Map<String, String> environmentDefines = const {},
 }) async {
@@ -184,7 +192,11 @@ Future<void> compileBaseline({
   final baseInput = '${output.path}/baseline.input.dill';
   await writeComponentToBinary(component, baseInput);
   final buildRecipe = <String, Object?>{
-    ...await _toolIdentity(sdk, options.sdkSummary!),
+    ...await _toolIdentity(
+      sdk,
+      options.sdkSummary!,
+      genSnapshotUri: genSnapshotUri,
+    ),
     'baselineKernelSha256': await _digestFile(File(baseInput)),
     'logicalLibraryUri': logicalLibraryUri,
     'baselineLibraryUri': baseline.importUri.toString(),
@@ -388,6 +400,7 @@ Future<void> compilePatch({
   required Directory output,
   Uri? platformDillUri,
   Uri? packagesFileUri,
+  Uri? genSnapshotUri,
 }) async {
   final spike = File.fromUri(Platform.script).parent.parent;
   final frozen =
@@ -406,7 +419,11 @@ Future<void> compilePatch({
       await _digestFile(baseInput) != recipe['baselineKernelSha256']) {
     throw const FormatException('frozen baseline identity mismatch');
   }
-  final toolIdentity = await _toolIdentity(sdk, platform);
+  final toolIdentity = await _toolIdentity(
+    sdk,
+    platform,
+    genSnapshotUri: genSnapshotUri,
+  );
   for (final key in toolIdentity.keys) {
     if (jsonEncode(toolIdentity[key]) != jsonEncode(recipe[key])) {
       throw FormatException('frozen compiler/toolchain mismatch: $key');
