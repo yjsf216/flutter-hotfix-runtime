@@ -240,5 +240,19 @@ int main(int argc, char **argv) {
   check_atomic_reads(root, argv[1]);
   check_failed_write(root);
   assert(psio_close(root) == 0);
+#if defined(__APPLE__)
+  assert(psio_set_app_base(argv[1]) == 0);
+  assert(psio_set_app_base(argv[1]) == -EALREADY);
+  assert(psio_open_root("/private/not-the-app/store", 1) == -EPERM);
+  char anchored[4096];
+  assert(snprintf(anchored, sizeof(anchored), "%s/anchored", argv[1]) > 0);
+  int child = psio_open_root(anchored, 1);
+  assert(child >= 0);
+  write_value(child, "value", "anchored");
+  expect_value(child, "value", "anchored");
+  check_paths(child, anchored);
+  assert(psio_close(child) == 0);
+  puts("PASS: immutable app base, outside-root rejection and anchored path checks");
+#endif
   return 0;
 }

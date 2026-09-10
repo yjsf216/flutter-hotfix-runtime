@@ -1,4 +1,23 @@
-# iOS device host (not yet device-verified)
+# iOS device host
+
+The initial device matrix now passes. See [device evidence](DEVICE_EVIDENCE.md)
+for verified scope, artifacts, personal signing and the startup fixes. The
+unsigned checkpoint below is historical, not the current signing status.
+
+## Latest checkpoint: unsigned app built, awaiting signing-team choice
+
+The Engine completed all 4,923 resumed Ninja actions successfully. The iOS
+generator produced frozen baseline
+`af10834c826cf54ce3c2d06ec1cab7eca1e22195b75ea246cd7b2f5c6dfa45e8`
+and a one-method Widget DBC3 patch. The same frozen Kernel was also compiled to
+Apple AOT assembly, then linked into an arm64 `App.framework`.
+
+Retained audit: `work/ios-device.wrQCNc` (reuse this; do not regenerate keys or
+the baseline while signing is pending). The generated Xcode project is
+`work/ios-device.wrQCNc/HotfixRuntime.xcodeproj`; unsigned app is under
+`build/Build/Products/Release-iphoneos/HotfixRuntime.app`. `unsigned-build.log`
+ends in `BUILD SUCCEEDED`. The user has been asked which Developer Team to use.
+No signing, installation or iOS patch execution has occurred yet.
 
 This native host reuses the shared signed Flutter/DBC3 fixture. It does not run
 Flutter's build scripts or replace the frozen baseline with a stock snapshot.
@@ -14,11 +33,11 @@ inspect connectivity; absence from `devicectl` is not proof of disconnection.
 
 1. `sh engine/build_ios_ddm.sh` builds the custom Release/AOT/DDM Engine and
    arm64 host snapshot generator from the already configured isolated checkout.
-   Metal Toolchain is now installed. The actual Engine build is in progress;
+   Metal Toolchain is now installed. The actual Engine build has completed;
    `work/ios-engine-build.log` retains output including the initial missing
    `vpython3` failure, followed by the resumed build with the correct environment.
 2. Produce the frozen iOS AOT baseline as assembly with this exact iOS generator,
-   then link it as `App.framework/App`. This packaging step is still pending;
+   then link it as `App.framework/App`. This packaging step has passed;
    the Android ELF is not an iOS framework.
 3. Stage `Flutter.framework` and `App.framework` in a task-owned directory.
    `App.framework` must contain the matching `flutter_assets` and framework
@@ -47,5 +66,5 @@ Negative cases must have null active/LKG and empty digests in fresh case roots.
 
 Checks completed: `ruby spikes/ios_spike/check_project.rb` verifies generated
 project structure; Ruby syntax and Objective-C syntax against the installed
-Flutter iOS public headers. No iOS app link, install, rendering or patch loading
-is claimed by those syntax checks. Device execution remains pending.
+Flutter iOS public headers. A subsequent unsigned iOS app link has passed.
+Installation, rendering and device patch execution remain pending.

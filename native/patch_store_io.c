@@ -20,6 +20,28 @@
 #define PSIO_MAX_PATH 4096
 #define PSIO_MAX_BYTES (64u * 1024u * 1024u)
 
+#if defined(__APPLE__)
+// Immutable after trusted app startup; the descriptor lives for the process.
+static int app_base_fd = -1;
+static char app_base_path[PSIO_MAX_PATH + 1];
+int psio_set_app_base(const char *path) {
+  if (app_base_fd >= 0) return -EALREADY;
+  if (!path || path[0] != '/' || strlen(path) > PSIO_MAX_PATH) return -EINVAL;
+  char resolved[PATH_MAX];
+  if (!realpath(path, resolved)) return -errno;
+  if (strcmp(path, resolved)) return -EINVAL;
+  int fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (fd < 0) return -errno;
+  struct stat info;
+  int error = fstat(fd, &info) < 0 ? -errno : 0;
+  if (!error && (info.st_uid != geteuid() || (info.st_mode & 0022))) error = -EPERM;
+  if (error) { close(fd); return error; }
+  strcpy(app_base_path, path);
+  app_base_fd = fd;
+  return 0;
+}
+#endif
+
 static int sync_fd(int fd) {
   int result;
   do {
@@ -155,9 +177,24 @@ int psio_open_root(const char *path, int create) {
   size_t length;
   int error = path_length(path + 1, &length);
   if (error) return error;
-  int base = open_directory(AT_FDCWD, "/", 0);
+  const char *relative = path + 1;
+  int base;
+#if defined(__APPLE__)
+  if (app_base_fd >= 0) {
+    size_t base_length = strlen(app_base_path);
+    if (strncmp(path, app_base_path, base_length) || path[base_length] != '/')
+      return -EPERM;
+    relative = path + base_length + 1;
+    length = strlen(relative);
+    base = fcntl(app_base_fd, F_DUPFD_CLOEXEC, 0);
+    if (base < 0) return -errno;
+  } else
+#endif
+  {
+    base = open_directory(AT_FDCWD, "/", 0);
+  }
   if (base < 0) return base;
-  int root = walk_directories(base, path + 1, length, create);
+  int root = walk_directories(base, relative, length, create);
   close(base);
   if (root < 0) return root;
   struct stat info;

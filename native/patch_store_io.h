@@ -22,6 +22,12 @@ extern "C" {
  * be absolute, with no symlink, empty, dot or dot-dot path components. Missing
  * directories are created with mode 0700 only when create is 1. */
 PSIO_API int psio_open_root(const char *absolute_path, int create);
+#if defined(__APPLE__)
+/* Trusted host initialization only, before starting runtime threads. Pins the
+ * canonical app-owned container base once. Subsequent roots must be beneath it.
+ * Never pass a path obtained from a patch, manifest or remote input. */
+PSIO_API int psio_set_app_base(const char *canonical_path);
+#endif
 PSIO_API int psio_close(int root_fd);
 
 /* Hold this directory-inode lock for the entire read/modify/write transaction.

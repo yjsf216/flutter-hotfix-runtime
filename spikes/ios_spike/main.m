@@ -1,5 +1,8 @@
 #import <Flutter/Flutter.h>
 #import <UIKit/UIKit.h>
+#include <limits.h>
+#include <stdlib.h>
+#include "../../native/patch_store_io.h"
 
 @interface HotfixAppDelegate : UIResponder <UIApplicationDelegate>
 @property(nonatomic, strong) UIWindow *window;
@@ -15,6 +18,18 @@
   NSString *documents = [files URLsForDirectory:NSDocumentDirectory
                                     inDomains:NSUserDomainMask].firstObject
                            .URLByResolvingSymlinksInPath.path;
+  // Foundation can preserve /var; POSIX no-follow traversal requires /private/var.
+  char resolved[PATH_MAX];
+  if (!realpath(documents.fileSystemRepresentation, resolved)) {
+    NSLog(@"HotfixRuntime FAIL: cannot resolve application Documents directory");
+    return NO;
+  }
+  documents = [files stringWithFileSystemRepresentation:resolved length:strlen(resolved)];
+  int baseError = psio_set_app_base(documents.fileSystemRepresentation);
+  if (baseError) {
+    NSLog(@"HotfixRuntime FAIL: app base initialization %d", baseError);
+    return NO;
+  }
   NSString *root = [documents stringByAppendingPathComponent:@"hotfix"];
 #if HOTFIX_DEVICE_TEST
   NSArray<NSString *> *args = NSProcessInfo.processInfo.arguments;
@@ -39,6 +54,14 @@
                     [files fileExistsAtPath:manifest] ||
                     [files fileExistsAtPath:store];
   self.engine = [[FlutterEngine alloc] initWithName:@"hotfix-runtime"];
+  BOOL started = [self.engine runWithEntrypoint:nil libraryURI:nil initialRoute:nil
+                               entrypointArgs:shouldLoad
+                                   ? @[patch, manifest, store, @"auto"] : nil];
+  if (!started) {
+    NSLog(@"HotfixRuntime FAIL: Engine did not start");
+    return NO;
+  }
+  // iOS creates the binary messenger's platform handler during Engine.run.
   self.resultChannel = [FlutterBasicMessageChannel
       messageChannelWithName:@"hotfix/runtime-smoke"
              binaryMessenger:self.engine.binaryMessenger
@@ -54,13 +77,6 @@
     }
     reply(nil);
   }];
-  BOOL started = [self.engine runWithEntrypoint:nil libraryURI:nil initialRoute:nil
-                               entrypointArgs:shouldLoad
-                                   ? @[patch, manifest, store, @"auto"] : nil];
-  if (!started) {
-    NSLog(@"HotfixRuntime FAIL: Engine did not start");
-    return NO;
-  }
   self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
   self.window.rootViewController = [[FlutterViewController alloc]
       initWithEngine:self.engine nibName:nil bundle:nil];
