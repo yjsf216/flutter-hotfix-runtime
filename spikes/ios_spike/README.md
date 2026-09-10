@@ -24,8 +24,11 @@ Flutter's build scripts or replace the frozen baseline with a stock snapshot.
 `main.m` and `create_project.rb` are development validation tooling, not a
 production app. Only the user-authorized iPhone may be used for deployment.
 
-Current authorized target: authorized developer的iPhone, iPhone 6s, iOS 15.8.7,
+Current authorized target: authorized iPhone, iPhone 6s, iOS 15.8.7,
 UDID `IOS_DEVICE_UDID`.
+`IOS_DEVICE_UDID` is a redacted placeholder, not a usable device ID. The USB
+helper requires `HOTFIX_TEST_DEVICE` to explicitly select your authorized phone;
+its `--self-check` performs no device access.
 For this older device, use `xcdevice` / the installed libimobiledevice tools to
 inspect connectivity; absence from `devicectl` is not proof of disconnection.
 

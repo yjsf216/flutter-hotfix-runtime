@@ -5,7 +5,7 @@ the actual custom Flutter Release/AOT/DDM Engine and shared signed loader.
 No patch file was manually placed in either app's inbox for these online tests.
 Apps were updated without uninstalling or clearing their data.
 
-| Stage | Android `ANDROID_DEVICE_SERIAL` | authorized developer的iPhone (iOS 15.8.7) |
+| Stage | Android `ANDROID_DEVICE_SERIAL` | authorized iPhone (iOS 15.8.7) |
 |---|---|---|
 | Signed bytecode uploaded by CLI | HTTP 201 | HTTP 201 |
 | First startup | Baseline page healthy | Baseline page healthy |

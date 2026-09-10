@@ -1,4 +1,4 @@
-// Test-only USB file transfer, restricted to this authorized phone and app.
+// Test-only USB transfer. Explicitly select an authorized phone; app scope is fixed.
 #include <libimobiledevice/libimobiledevice.h>
 #include <libimobiledevice/house_arrest.h>
 #include <libimobiledevice/afc.h>
@@ -30,12 +30,17 @@ int main(int argc, char **argv) {
       (strcmp(argv[1], "get") && strcmp(argv[1], "put") &&
        strcmp(argv[1], "mkdir") && strcmp(argv[1], "rename"))) return 2;
   if (!strcmp(argv[1], "rename") && (argc != 4 || !allowed(argv[3]))) return 2;
+  const char *udid = getenv("HOTFIX_TEST_DEVICE");
+  if (!udid || !*udid || !strcmp(udid, "IOS_DEVICE_UDID")) {
+    fprintf(stderr, "Set HOTFIX_TEST_DEVICE to your authorized iPhone UDID\n");
+    return 2;
+  }
   idevice_t device = NULL;
   house_arrest_client_t house = NULL;
   afc_client_t afc = NULL;
   plist_t result = NULL;
   check(idevice_new_with_options(&device,
-      "IOS_DEVICE_UDID", IDEVICE_LOOKUP_USBMUX), "device");
+      udid, IDEVICE_LOOKUP_USBMUX), "device");
   check(house_arrest_client_start_service(device, &house, "HotfixRuntimeCheck"), "house arrest");
   check(house_arrest_send_command(house, "VendContainer", "dev.hotfixruntime.ios-spike"), "container");
   check(house_arrest_get_result(house, &result), "container response");

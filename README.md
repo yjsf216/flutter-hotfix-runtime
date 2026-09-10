@@ -1,5 +1,31 @@
 # Flutter Hotfix Runtime
 
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+
+实验性 Flutter 热更新运行时：冻结 AOT 基线 + 签名 DBC3 补丁 + 内置解释执行。
+Android/iOS 的有限真机验证及在线补丁闭环已完成；**不是生产 SDK，不保证 App Store 审核通过**。
+
+## Start here
+
+- [Architecture](ARCHITECTURE.md) and [compatibility limits](COMPATIBILITY.md).
+- [Online delivery workflow](delivery/README.md) and [reported device evidence](delivery/EVIDENCE.md).
+- Native-only smoke check on a POSIX host with a C compiler: `sh native/run_patch_store_io_check.sh`.
+- Full builds require the **pinned custom Flutter/Dart source and toolchains**
+  described in [engine setup](engine/README.md). A normal `flutter pub get` on
+  a fresh clone does not provide the custom interpreter or compiler.
+
+This public release contains source, fixtures and documentation only. Private
+`work/` artifacts referenced by historical evidence are **not included**; those
+reports record the author's finite tests, not independently reproducible logs
+shipped in this repository. Device/team identifiers have been replaced with
+placeholders. Set `FLUTTER_SDK`/`DART_BIN` for your installation and
+`HOTFIX_TEST_DEVICE` for an explicitly authorized iPhone when using the USB helper.
+Replace `/path/to/...` examples with your local paths. Never copy development
+HTTP or signing configuration into a production distribution.
+
+Original project code is [Apache-2.0 licensed](LICENSE); see
+[third-party notices](THIRD_PARTY_NOTICES.md) and [contribution guidance](CONTRIBUTING.md).
+
 Independent, self-hosted research and implementation of a signed Flutter Patch IR interpreter with bundled-baseline AOT linkage. This repository is **not production-ready**. Android and iOS have passed the finite physical-device MVP matrix; OHOS is deferred.
 
 The [minimal online delivery loop](delivery/README.md) now covers patch-only CLI,

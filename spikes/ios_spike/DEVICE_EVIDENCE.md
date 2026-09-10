@@ -1,6 +1,6 @@
 # iOS device AOT/DBC3 verification
 
-Verified on authorized developer的iPhone (iPhone 6s, iOS 15.8.7), USB UDID
+Verified on authorized iPhone (iPhone 6s, iOS 15.8.7), USB UDID
 `IOS_DEVICE_UDID`, on 2026-09-10.
 Only `dev.hotfixruntime.ios-spike` was installed/launched. Personal Team
 `PERSONAL_TEAM_ID` was explicitly authorized and the user trusted its developer on

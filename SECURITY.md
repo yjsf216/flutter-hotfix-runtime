@@ -1,5 +1,13 @@
 # Security model
 
+**Experimental, not independently security-audited or production-ready.**
+The sections below include design requirements and historical checkpoints.
+For current device scope see `spikes/ios_spike/DEVICE_EVIDENCE.md` and
+`delivery/EVIDENCE.md`. The delivery service is development-only; reports are
+unauthenticated/best-effort and must never drive activation. Only 100% rollout
+is currently accepted; partial buckets and server-directed withdrawal are not
+implemented. App Store acceptance is not established by device tests.
+
 Network, CDN, manifest storage, downloaded bytes, local disk, clocks, and process termination are untrusted. The app-embedded public-key set and bundled AOT are trust anchors; the offline private key is outside the runtime system.
 
 ## Mandatory checks before selection
