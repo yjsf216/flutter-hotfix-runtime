@@ -1,8 +1,8 @@
 // Embedded by the release build; host is a test harness, not a shipping target.
 const baselineId = 'dbc3-host-baseline-v1';
 const releaseIdentity = <String, Object?>{
-  'appId': 'dev.hotfixruntime.fixture',
-  'platform': 'host',
+  'appId': String.fromEnvironment('HOTFIX_APP_ID', defaultValue: 'dev.hotfixruntime.fixture'),
+  'platform': String.fromEnvironment('HOTFIX_PLATFORM', defaultValue: 'host'),
   'abi': 'arm64',
   'release': '1.0.0+1',
   'flutterRevision': '00b0c91f06209d9e4a41f71b7a512d6eb3b9c694',

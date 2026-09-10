@@ -50,13 +50,9 @@
   NSString *store = [root stringByAppendingPathComponent:@"store"];
   NSString *result = [root stringByAppendingPathComponent:@"result.txt"];
   [files removeItemAtPath:result error:nil];
-  BOOL shouldLoad = [files fileExistsAtPath:patch] ||
-                    [files fileExistsAtPath:manifest] ||
-                    [files fileExistsAtPath:store];
   self.engine = [[FlutterEngine alloc] initWithName:@"hotfix-runtime"];
   BOOL started = [self.engine runWithEntrypoint:nil libraryURI:nil initialRoute:nil
-                               entrypointArgs:shouldLoad
-                                   ? @[patch, manifest, store, @"auto"] : nil];
+                               entrypointArgs:@[patch, manifest, store, @"auto"]];
   if (!started) {
     NSLog(@"HotfixRuntime FAIL: Engine did not start");
     return NO;

@@ -38,11 +38,8 @@ class MainActivity : FlutterActivity() {
         val manifest = File(inbox, "manifest.json")
         val store = File(root, "store")
         Log.i(TAG, "bootstrap root=${root.path}, patch=${patch.exists()}, manifest=${manifest.exists()}")
-        return if (!patch.exists() && !manifest.exists() && !store.exists()) {
-            null
-        } else {
-            listOf(patch.path, manifest.path, store.path, "auto")
-        }
+        // Even a clean install initializes storage for post-health update checks.
+        return listOf(patch.path, manifest.path, store.path, "auto")
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

@@ -152,6 +152,10 @@ Future<void> compileBaseline({
         Platform.environment['HOTFIX_TEST_PUBLIC_KEY'] ?? '',
     'HOTFIX_NATIVE_STORE':
         Platform.environment['HOTFIX_NATIVE_STORE'] ?? 'false',
+    'HOTFIX_UPDATE_ORIGIN': Platform.environment['HOTFIX_UPDATE_ORIGIN'] ?? '',
+    'HOTFIX_ALLOW_DEV_HTTP': Platform.environment['HOTFIX_ALLOW_DEV_HTTP'] ?? 'false',
+    'HOTFIX_APP_ID': Platform.environment['HOTFIX_APP_ID'] ?? 'dev.hotfixruntime.fixture',
+    'HOTFIX_PLATFORM': Platform.environment['HOTFIX_PLATFORM'] ?? 'host',
     ...environmentDefines,
   };
   retainedLibraries = {

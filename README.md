@@ -1,17 +1,21 @@
 # Flutter Hotfix Runtime
 
-Independent, self-hosted research and implementation of a signed Flutter Patch IR interpreter with bundled-baseline AOT linkage. This repository is **not production-ready**. Android is the host development platform; iOS and OHOS remain research targets.
+Independent, self-hosted research and implementation of a signed Flutter Patch IR interpreter with bundled-baseline AOT linkage. This repository is **not production-ready**. Android and iOS have passed the finite physical-device MVP matrix; OHOS is deferred.
+
+The [minimal online delivery loop](delivery/README.md) now covers patch-only CLI,
+authenticated upload/filesystem storage, app check/download, next-start activation
+and result reporting. See [Android/iOS online evidence](delivery/EVIDENCE.md).
 
 ## Current status
 
 | Area | Status | Evidence required to advance |
 |---|---|---|
 | Manifest/security contract | P-256, frozen release identity, native transaction/fsync/no-follow store pass in host AOT; Android APK bundles native store | complete Engine/iOS/HAR integration, platform fault tests, trusted anti-replay and key operations |
-| Android 3.41.9 baseline | host build verified | device validation is manual and not run by this task |
+| Android 3.41.9 baseline | custom AOT/DDM Engine + signed device patch and online delivery verified | broader semantics, device matrix and production operations |
 | Android external `libapp.so` | research/benchmark only | not a store production backend |
-| Unified Patch IR Runtime | frozen release → automatic signed DBC3 → native store → AOT passes; real Flutter Widget AOT/DBC3 artifacts generated | Flutter Engine loading/rendering, remaining language lowering and platform gates |
+| Unified Patch IR Runtime | frozen release → signed DBC3 → native store → actual Flutter Engine rendering passes on Android/iOS | remaining language lowering, fault coverage and production gates |
 | OHOS 3.27.5-ohos-1.0.5 | embedder path located | shared Runtime port after Android/iOS gates |
-| iOS | dynamic-enabled VM core cross-compiles | Flutter Engine link and runtime execution |
+| iOS | custom Engine links; personal-signed Release device startup, patch, fallback and online delivery verified | App Store feasibility, broader devices and production signing |
 
 ## Reproduce the baseline
 

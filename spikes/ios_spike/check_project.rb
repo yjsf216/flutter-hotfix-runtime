@@ -13,6 +13,8 @@ Dir.mktmpdir('hotfix-ios-project-check') do |root|
   target = Xcodeproj::Project.open(output).targets.fetch(0)
   abort 'sources absent' unless target.source_build_phase.files.count == 2
   abort 'frameworks absent' unless target.copy_files_build_phases.first.files.count == 2
+  scheme = Xcodeproj::XCScheme.new(File.join(output, 'xcshareddata/xcschemes/HotfixRuntime.xcscheme'))
+  abort 'launch target absent' unless scheme.launch_action.buildable_product_runnable
   target.build_configurations.each do |config|
     flags = config.build_settings.fetch('OTHER_LDFLAGS')
     abort 'FFI exports missing' unless flags.count { |f| f.start_with?('-Wl,-u,_psio_') } == 7

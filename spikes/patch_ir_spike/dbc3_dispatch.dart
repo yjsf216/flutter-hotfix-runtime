@@ -9,6 +9,7 @@ import 'fixtures/patch_hook.dart' as hook;
 import 'signed_manifest.dart';
 import 'signed_patch_loader.dart';
 import 'native_store_io.dart';
+import 'update_client.dart';
 
 typedef PatchFunction = Object? Function(Object? receiver, List<Object?> args);
 
@@ -60,6 +61,20 @@ Future<LoadedPatch<void>?> bootSignedModule(List<String> paths) async {
 }
 
 bool commitModuleHealth(LoadedPatch<void> patch) => _loader.markHealthy(patch);
+
+Future<void> checkUpdatesAfterHealth(LoadedPatch<void>? patch) async {
+  const origin = String.fromEnvironment('HOTFIX_UPDATE_ORIGIN');
+  if (origin.isEmpty) return;
+  try {
+    final delivery = UpdateClient(_loader, Uri.parse(origin),
+      allowDevelopmentHttp: const bool.fromEnvironment('HOTFIX_ALLOW_DEV_HTTP'));
+    await delivery.report(patch == null ? 'baseline_healthy' : 'patch_healthy', patch?.patchId);
+    final status = await delivery.checkAndDownload(runningPatchId: patch?.patchId);
+    print('HotfixDelivery $status (takes effect on next startup)');
+  } on Object catch (error) {
+    print('HotfixDelivery unavailable: $error');
+  }
+}
 
 void activateModule(Object? result) {
   if (result is! Map) throw const FormatException('module table required');

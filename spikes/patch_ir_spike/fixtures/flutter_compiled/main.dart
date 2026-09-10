@@ -59,6 +59,7 @@ Future<void> main(List<String> arguments) async {
       throw StateError('signed patch did not pass the health checkpoint');
     }
     await result.send('PASS');
+    await checkUpdatesAfterHealth(patch);
   } on Object catch (error) {
     await result.send('FAIL:$error');
   }

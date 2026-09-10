@@ -49,16 +49,20 @@ final class SignedPatchLoader {
       final manifest = verifier.verify(envelope);
       if (manifest == null || manifest.rolloutPercent != 100) return false;
       final artifact = _readSource(modulePath, manifest.artifactSize);
-      return artifact != null &&
-          store.install(
-            manifest.patchId,
-            artifact,
-            manifest.artifactSha256,
-            manifest: envelope,
-          );
+      return artifact != null && stageBytes(envelope, artifact);
     } on Object {
       return false;
     }
+  }
+
+  /// Accept only fully downloaded authenticated bytes; native store commits
+  /// them atomically. Installing does not activate a module in this process.
+  bool stageBytes(Uint8List envelope, Uint8List artifact) {
+    final manifest = verifier.verify(envelope);
+    return manifest != null && manifest.rolloutPercent == 100 &&
+        manifest.matchesArtifact(artifact) && store.install(
+          manifest.patchId, artifact, manifest.artifactSha256, manifest: envelope,
+        );
   }
 
   Uint8List? _readSource(String path, int limit) => store.nativeIo == null

@@ -28,6 +28,7 @@ target.build_configurations.each do |config|
     'GENERATE_INFOPLIST_FILE' => 'YES',
     'INFOPLIST_KEY_UILaunchScreen_Generation' => 'YES',
     'INFOPLIST_KEY_CFBundleDisplayName' => 'Hotfix Runtime',
+    'INFOPLIST_KEY_NSLocalNetworkUsageDescription' => 'Connect to the development patch service for hotfix verification.',
     'CURRENT_PROJECT_VERSION' => '1',
     'MARKETING_VERSION' => '1.0',
     'CLANG_ENABLE_OBJC_ARC' => 'YES',
@@ -42,4 +43,8 @@ target.build_configurations.each do |config|
   })
 end
 project.save
+scheme = Xcodeproj::XCScheme.new
+scheme.configure_with_targets(target, nil, launch_target: true)
+scheme.launch_action.build_configuration = 'Release'
+scheme.save_as(project.path, 'HotfixRuntime', true)
 puts output
