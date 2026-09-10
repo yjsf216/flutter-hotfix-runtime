@@ -67,3 +67,37 @@ Remaining gates include mobile Engine linking/packaging, actual target execution
 iOS Metal tooling, broader Engine-level semantic/failure coverage, performance,
 durability and policy review. Passing this finite matrix does not complete the
 three-platform Runtime goal.
+
+## Android development APK: packaging gate passed
+
+`spikes/android_spike/build/prebuilt-app/outputs/apk/release/app-release.apk`
+was built offline using the explicit `hotfix.prebuilt` Gradle mode. This mode
+does not load Flutter's Gradle plugins or run `flutter assemble`, so it does not
+regenerate the frozen patch-point baseline. It uses the pinned Java embedding
+`1.0.0-42d3d75a56efe1a2e9902f52dc8006099c45d937` and builds the native store from
+the existing CMake source. Signing is the development/debug key, not production.
+
+Build and verification logs: `work/luna-prebuilt-assembleRelease.log` and
+`work/luna-prebuilt-verify.log`. Staged inputs are retained at
+`work/luna-prebuilt-stage.zqORes`.
+
+- APK v2 signature verification passed.
+- Exactly three native libraries are packaged, all under `lib/arm64-v8a`.
+- Engine and baseline AOT payloads are byte-identical to their staged inputs.
+- All seven `psio_*` exports are present in the native store.
+- `zipalign -c -P 16 -v 4` passed for the whole APK. Engine/AOT LOAD segments
+  have 64 KiB alignment; native-store LOAD segments have 16 KiB alignment.
+
+```text
+APK SHA-256:
+c344add3ed61503f5dcf65e8530ddd1f679f61bd11adc23e374f8b37bb8ab3e1
+Packaged libflutter.so SHA-256:
+7a4e2d4e156c5961d7c3a708487419fba09839e2d7822be9d5afecc60993bc99
+Packaged libapp.so SHA-256:
+b1a40f3f889feda8e6b7afc603f9ffe80c357a7eed04ac0adf4d45788262c15e
+```
+
+The baseline and signed patch inputs come from `work/android-release-check.qft7KT`.
+The APK packages the baseline/runtime, not an automatically applied downloaded
+patch. Application-side patch acquisition/bootstrap and actual Android execution
+remain unverified. The APK was not installed or launched on any device.

@@ -242,7 +242,9 @@ Widget DBC3 patch in `work/android-release-check.qft7KT`. Its
 `artifacts/flutter-evidence.json` records the selected generator SHA-256 and
 unchanged release files. Reproduce with `GEN_SNAPSHOT` pointing to the target
 generator when calling `spikes/patch_ir_spike/run_flutter_kernel.sh`; do not use
-this Android snapshot as input to the host Engine runner. APK integration and
-target execution remain separate gates.
+this Android snapshot as input to the host Engine runner. The explicit prebuilt
+development APK packaging gate now passes, including signature, exact library
+bytes and 16 KiB alignment; see [Android APK evidence](EVIDENCE.md#android-development-apk-packaging-gate-passed).
+Application bootstrap and target execution remain separate gates.
 Full Java/archive builds additionally need the pinned OpenJDK and Android
 embedding dependencies; the native preflight does not claim those are installed.
