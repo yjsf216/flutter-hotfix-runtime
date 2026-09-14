@@ -1,5 +1,10 @@
 # Project CLI checkpoint (2026-09-14)
 
+Subsequent Android packaging and online device verification now pass; see
+[device evidence](DEVICE_EVIDENCE.md). iOS packaging was prepared, but iOS device
+verification is paused at the user's request. The compiler-only checkpoint
+below records the earlier phase.
+
 Completed without modifying another business project or operating a device:
 
 - Order view/model widget tests: async load, quantity change and the intentional

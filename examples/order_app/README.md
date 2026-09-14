@@ -1,5 +1,9 @@
 # Order repair example
 
+Latest: [Android online device verification passed](DEVICE_EVIDENCE.md), including
+the rendered 2400 → 2200 repair. iOS device verification is paused; packaging
+continues to use the existing test hosts rather than an automatic APK/IPA CLI.
+
 A separate Flutter project with data access (`order_repository.dart`), observable
 state (`order_model.dart`), view/preview (`order_view.dart`) and a selected patchable
 business library (`pricing.dart`). It never edits another business app.
