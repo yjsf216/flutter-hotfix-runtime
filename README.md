@@ -7,6 +7,10 @@ Android/iOS 的有限真机验证及在线补丁闭环已完成；**不是生产
 
 ## Start here
 
+- New: [project CLI and independent order repair example](examples/order_app/README.md).
+  `sh tool/hotfix --help` lists release, patch, sign, publish and serve commands.
+  One selected business library is patchable; native packaging remains explicit.
+
 - [Architecture](ARCHITECTURE.md) and [compatibility limits](COMPATIBILITY.md).
 - [Online delivery workflow](delivery/README.md) and [reported device evidence](delivery/EVIDENCE.md).
 - Native-only smoke check on a POSIX host with a C compiler: `sh native/run_patch_store_io_check.sh`.

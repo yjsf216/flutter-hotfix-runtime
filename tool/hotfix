@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+sdk=${DART_SDK_SOURCE:-"$root/work/upstream/dart-sdk"}
+export DART_SDK_SOURCE="$sdk"
+dart=${DART_BIN:-dart}
+exec "$dart" --packages="$sdk/.dart_tool/package_config.json" \
+  "$root/spikes/patch_ir_spike/tool/project_cli.dart" "$@"

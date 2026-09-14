@@ -1,0 +1,18 @@
+name: hotfix_order_example
+publish_to: none
+version: 1.0.0+1
+environment:
+  sdk: ^3.11.0
+dependencies:
+  flutter:
+    sdk: flutter
+  patch_ir_spike:
+    path: ../../spikes/patch_ir_spike
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+dependency_overrides:
+  _fe_analyzer_shared:
+    path: ../../work/upstream/dart-sdk/pkg/_fe_analyzer_shared
+flutter:
+  uses-material-design: true

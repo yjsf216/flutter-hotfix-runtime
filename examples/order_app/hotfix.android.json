@@ -1,0 +1,8 @@
+{
+  "project": ".",
+  "entry": "lib/main.dart",
+  "patchLibrary": "lib/pricing.dart",
+  "platform": "android",
+  "appId": "dev.hotfixruntime.order",
+  "release": "1.0.0+1"
+}

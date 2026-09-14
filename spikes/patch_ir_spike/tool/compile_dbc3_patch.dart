@@ -214,7 +214,8 @@ Future<void> compileBaseline({
       .convert(utf8.encode(jsonEncode(buildRecipe)))
       .toString();
   final hooks = component.libraries.singleWhere(
-    (lib) => lib.fileUri.path.endsWith('/patch_hook.dart'),
+    (lib) => lib.fileUri.path.endsWith('/patch_hook.dart') &&
+        lib.procedures.any((p) => p.name.text == 'hotfixHasPatch'),
   );
   final hasPatch = hooks.procedures.singleWhere(
     (p) => p.name.text == 'hotfixHasPatch',
@@ -295,7 +296,8 @@ Future<void> compileBaseline({
     );
   }
   final runtime = component.libraries.singleWhere(
-    (lib) => lib.fileUri.path.endsWith('/dbc3_dispatch.dart'),
+    (lib) => lib.fileUri.path.endsWith('/dbc3_dispatch.dart') &&
+        lib.fields.any((f) => f.name.text == 'baselinePatchIds'),
   );
   final idField = runtime.fields.singleWhere(
     (f) => f.name.text == 'baselinePatchIds',
