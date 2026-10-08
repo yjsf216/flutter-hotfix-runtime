@@ -19,6 +19,7 @@ Android/iOS 的有限真机验证及在线补丁闭环已完成；**不是生产
   `patch-android` builds and signs a compatible patch from a clean Git commit.
 
 - [Architecture](ARCHITECTURE.md) and [compatibility limits](COMPATIBILITY.md).
+- [Android compatibility and acceptance checks](ANDROID_ACCEPTANCE.md).
 - [Online delivery workflow](delivery/README.md) and [reported device evidence](delivery/EVIDENCE.md).
 - Native-only smoke check on a POSIX host with a C compiler: `sh native/run_patch_store_io_check.sh`.
 - Full builds require the **pinned custom Flutter/Dart source and toolchains**

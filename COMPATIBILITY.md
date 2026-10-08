@@ -32,9 +32,14 @@ A patch is compatible only when every signed identity field equals the running r
 - Engine/VM snapshot formats are treated as private, exact-revision contracts.
 - First-launch update is intentionally not supported; downloads occur without blocking the current known-good launch.
 - iOS implementation passes the documented finite device matrix; production and App Review gates remain open.
-- Project CLI currently supports one explicitly selected patchable Dart library.
-  Other lib sources, declared assets/fonts, native source/configuration and dependency
-  metadata are guarded. This is not arbitrary multi-library hot reload.
+- Project CLI supports compatible method-body changes across existing compiled
+  project libraries with `patchScope: lib`, or one selected `patchLibrary`.
+  New/deleted libraries, class/field/constructor layouts, signatures, assets/fonts,
+  native configuration and dependency metadata remain guarded.
+- Multi-library Flutter baselines retain the public API of Flutter libraries
+  present in the frozen Kernel. Nested constants are traversed and their business
+  class/member/type references are rebound to the frozen baseline. This permits
+  common Widget composition without admitting arbitrary new dependencies.
 - The order example has widget tests and target-specific baseline/patch compilation;
   its own new physical-device online matrix is separate from the earlier greeting demo.
 - Store acceptance varies by behavior and jurisdiction; technical success does not establish compliance.
