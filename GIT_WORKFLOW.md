@@ -1,5 +1,7 @@
 # Flutter 热更新接入与发布指南（实验性）
 
+第一次使用请先读[Android 简化流程](GETTING_STARTED.md)；自定义工程见[手动接入与排错](MANUAL_INTEGRATION.md)。本文作为配置、代码位置和低层命令参考。
+
 本文面向已接入本运行时的 Flutter 项目，不绑定具体业务 App。
 目前的统一 APK 构建入口支持 Android arm64；不是对任意 Flutter 工程的一键接入，
 也不是生产安全认证。iOS 的历史实验不代表已具备相同的发布能力或审核结论。

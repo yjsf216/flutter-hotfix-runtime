@@ -2,7 +2,16 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 case "${1:-}" in
+  init|build|status)
+    exec python3 -B "$root/tool/app_cli.py" "$@"
+    ;;
+  patch|publish|serve)
+    if [ "$#" -eq 1 ] || { [ "$1" = publish ] && [ "${2:-}" = --yes ]; }; then
+      exec python3 -B "$root/tool/app_cli.py" "$@"
+    fi
+    ;;
   --help)
+    printf '%s\n' 'App shortcuts: hotfix init | build | patch | publish [--yes] | serve | status'
     printf '%s\n' 'hotfix release-android CONFIG OUTPUT [--resume-packaging]' 'hotfix patch-android ARCHIVE REF OUTPUT KEY_DIR PATCH_ID'
     ;;
   release-android|patch-android)

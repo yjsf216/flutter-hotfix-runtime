@@ -7,6 +7,7 @@ Android/iOS 的有限真机验证及在线补丁闭环已完成；**不是生产
 
 ## Start here
 
+- 首次使用：[Android 简化流程](GETTING_STARTED.md)：初始化一次，日常 `build → patch → publish`。自定义工程见[手动接入与排错](MANUAL_INTEGRATION.md)。
 - 中文入口：[接入、配置与日常发布流程](GIT_WORKFLOW.md)。说明配置文件、
   代码位置、本地补丁服务与正式部署的区别，示例不依赖具体业务项目。
 - New: [project CLI and independent order repair example](examples/order_app/README.md).

@@ -1,5 +1,7 @@
 # Minimal patch delivery loop (development MVP)
 
+首次接入请先按[Android 简化流程](../GETTING_STARTED.md)操作；本页是服务与 API 参考。
+
 Implemented: compile signed DBC3 → authenticated upload + local file storage →
 app check/download → next-start activation → result reports. No management site,
 database, cloud account or production deployment is required.

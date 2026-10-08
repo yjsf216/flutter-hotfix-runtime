@@ -63,7 +63,11 @@ def apk_info(apk, build_tools):
     match = re.search(r"^package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'", info)
     require(match is not None, 'Cannot read APK identity')
     signature = run([build_tools / 'apksigner', 'verify', '--print-certs', apk], capture=True)
-    certs = re.findall(r'Signer #\d+ certificate SHA-256 digest: (\w+)', signature)
+    # Build-tools 37 prefixes scheme-specific signers with "V2 Signer:".
+    # Only signer certificates count; never mistake a source stamp for one.
+    certs = sorted({value.lower() for value in re.findall(
+        r'^(?:Signer #\d+|V[1-4](?:\.\d+)? Signer:)\s+certificate SHA-256 digest:\s+([a-fA-F0-9]{64})\s*$',
+        signature, re.M)})
     require(bool(certs), 'APK has no verified signer')
     return {'appId': match[1], 'release': f'{match[3]}+{match[2]}', 'certificates': certs}
 
@@ -89,8 +93,11 @@ def init_script():
     app.tasks.named('strip' + variant.capitalize() + 'DebugSymbols').configure {
         outputs.upToDateWhen { false }
         doLast {
-            def dest = new File(app.buildDir, 'intermediates/stripped_native_libs/' + variant + '/out/lib/arm64-v8a')
-            if (!dest.isDirectory()) throw new GradleException('Missing arm64 strip output')
+            def base = new File(app.buildDir, 'intermediates/stripped_native_libs/' + variant)
+            def candidates = [new File(base, 'out/lib/arm64-v8a'),
+                new File(base, 'strip' + variant.capitalize() + 'DebugSymbols/out/lib/arm64-v8a')].findAll { it.isDirectory() }
+            if (candidates.size() != 1) throw new GradleException('Missing or ambiguous arm64 strip output')
+            def dest = candidates[0]
             // CMake/dependencies can contribute other ABIs despite Flutter's target.
             // Only remove generated strip outputs, never source/native inputs.
             dest.parentFile.listFiles().findAll { it.isDirectory() && it.name != 'arm64-v8a' }.each { app.delete(it) }
@@ -165,7 +172,9 @@ def release(config_path, output, resume=False):
         script = output / 'package.init.gradle'
         script.write_text(init_script())
         libs = {'libapp.so': digest(baseline / 'libapp.so'), 'libflutter.so': digest(engine)}
-        stripped = project / f'build/app/intermediates/stripped_native_libs/{variant}/out/lib/arm64-v8a'
+        strip_root = project / f'build/app/intermediates/stripped_native_libs/{variant}'
+        stripped_dirs = [strip_root / 'out/lib/arm64-v8a',
+                         strip_root / f'strip{variant[0].upper() + variant[1:]}DebugSymbols/out/lib/arm64-v8a']
         try:
             run([project / 'android/gradlew', '-p', project / 'android', '--init-script', script,
                  ':app:assemble' + variant[0].upper() + variant[1:], '-PhotfixRuntime=true',
@@ -192,10 +201,11 @@ def release(config_path, output, resume=False):
         finally:
             # Avoid leaving custom native objects in the normal build intermediates.
             with zipfile.ZipFile(original) as archive:
-                for name in libs:
-                    target = stripped / name
-                    if target.is_file():
-                        target.write_bytes(archive.read('lib/arm64-v8a/' + name))
+                for stripped in stripped_dirs:
+                    for name in libs:
+                        target = stripped / name
+                        if target.is_file():
+                            target.write_bytes(archive.read('lib/arm64-v8a/' + name))
 
 
 def patch(archive, ref, output, keys, patch_id):

@@ -35,10 +35,21 @@ with tempfile.TemporaryDirectory() as directory:
     rejects(lambda: build.verify_libs(apk, expected))
     with patch.object(build, 'run', side_effect=[
         "package: name='example.app' versionCode='12' versionName='1.2'\n",
-        'Signer #1 certificate SHA-256 digest: abc123\n',
+        'Signer #1 certificate SHA-256 digest: ' + 'a' * 64 + '\n',
     ]):
         assert build.apk_info(apk, root) == {
-            'appId': 'example.app', 'release': '1.2+12', 'certificates': ['abc123']}
+            'appId': 'example.app', 'release': '1.2+12', 'certificates': ['a' * 64]}
+    with patch.object(build, 'run', side_effect=[
+        "package: name='example.app' versionCode='12' versionName='1.2'\n",
+        'V2 Signer: certificate SHA-256 digest: ' + 'b' * 64 + '\n' +
+        'V3 Signer: certificate SHA-256 digest: ' + 'b' * 64 + '\n',
+    ]):
+        assert build.apk_info(apk, root)['certificates'] == ['b' * 64]
+    with patch.object(build, 'run', side_effect=[
+        "package: name='example.app' versionCode='12' versionName='1.2'\n",
+        'Source Stamp Signer certificate SHA-256 digest: ' + 'c' * 64 + '\n',
+    ]):
+        rejects(lambda: build.apk_info(apk, root))
     assert 'hotfixAot' in build.init_script()
     assert "it.name != 'arm64-v8a'" in build.init_script()
     # Explicit packaging retry cannot overwrite completed releases or accept
