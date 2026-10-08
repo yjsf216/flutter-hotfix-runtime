@@ -4,9 +4,10 @@
 The sections below include design requirements and historical checkpoints.
 For current device scope see `spikes/ios_spike/DEVICE_EVIDENCE.md` and
 `delivery/EVIDENCE.md`. The delivery service is development-only; reports are
-unauthenticated/best-effort and must never drive activation. Only 100% rollout
-is currently accepted; partial buckets and server-directed withdrawal are not
-implemented. App Store acceptance is not established by device tests.
+unauthenticated observations and must never drive activation. The phase-three
+loader adds private stable rollout buckets, signed patch withdrawal and a bounded
+durable report outbox. See `GIT_WORKFLOW.md` for the new-base requirement, limits
+and acceptance scope. App Store acceptance is not established by device tests.
 
 Network, CDN, manifest storage, downloaded bytes, local disk, clocks, and process termination are untrusted. The app-embedded public-key set and bundled AOT are trust anchors; the offline private key is outside the runtime system.
 
@@ -35,7 +36,8 @@ Failure at any step is fail-open for app availability and fail-closed for the ca
 - Generate and use signing keys offline or in an approved HSM/KMS signing boundary.
 - Embed at least current and next public keys; signed metadata identifies the key.
 - Rotation requires an app release unless the next key was pre-embedded.
-- Revocation and channel withdrawal are distinct: revocation distrusts a key/patch; withdrawal stops new assignment.
+- Distribution pause stops new assignment; signed patch withdrawal permanently
+  denies that patch ID after the client receives it, switching on next startup.
 - Never log keys, tokens, full device identifiers, or downloaded code bytes.
 
 ## Verified host checks and remaining work
@@ -79,9 +81,22 @@ but the shared library is not yet packaged into a Flutter HAR.
 
 Still required: complete Engine/iOS app/OHOS HAR integration and runtime checks,
 platform power-loss and filesystem fault injection, trusted anti-replay/downgrade
-state, partial rollout buckets and deployment/revocation operations.
-Local expiry alone is not trusted anti-replay. Current rollout accepts only
-100 percent. Host tests do not establish these remaining properties.
+state and production deployment operations. Local expiry alone is not trusted
+anti-replay. Healthy-expiry exemption relies on the persisted app-private LKG
+marker, not hardware-authenticated rollback state: an adversary controlling local
+state or clocks can replay formerly signed compatible code. Signatures still
+prevent unauthenticated code, and received withdrawal/failure evidence persists
+under the ordinary app-private storage assumption. Hardware-backed anti-rollback,
+key rotation operations, production access controls/rate limits and independent
+security review remain required before a production-security claim.
+
+Host regressions cover signed partial rollout thresholds and monotonic expansion,
+pause/resume, permanent signed withdrawal, strict expired admission versus healthy
+LKG reuse, interrupted downloads, persisted reports, idempotent ingestion and
+recovery of an incomplete report-log tail. These do not establish full platform
+power-loss durability or trustworthy user counts. Reports carry random event IDs,
+not account/device IDs; the grouping salt stays local. Queues/logs are explicitly
+bounded and do not control startup health.
 
 ## Reporting
 

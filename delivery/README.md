@@ -4,6 +4,11 @@ Implemented: compile signed DBC3 → authenticated upload + local file storage �
 app check/download → next-start activation → result reports. No management site,
 database, cloud account or production deployment is required.
 
+For the current Android Git/APK workflow and phase-three controls, use
+[GIT_WORKFLOW.md](../GIT_WORKFLOW.md). The fixture commands below remain useful
+for the earlier spike; the new loader requires a new base APK and a server with
+the withdrawal-feed endpoint. Historical iOS evidence is not phase-three testing.
+
 Both Android and iOS physical devices passed the online two-start loop; see
 [evidence](EVIDENCE.md). This is development validation, not App Store approval.
 
@@ -55,8 +60,11 @@ dart -DHOTFIX_APP_ID=dev.hotfixruntime.android_spike -DHOTFIX_PLATFORM=android \
 The existing offline `signature_check.dart keygen DIRECTORY` creates development
 P-256 keys. The signing machine retains the private key; upload never sends it.
 The signer app/platform values must match the baseline; the client rejects a
-different identity. Test manifests expire after one day. IDs are immutable:
-retry publication using the exact same envelope, not a newly signed replacement.
+different identity. New admission defaults to one day; the phase-three loader
+retains authenticated healthy LKG after expiry. Payload/identity per patch ID are
+immutable. Retry the exact envelope, or explicitly sign a newer rollout/withdrawal
+policy with `hotfix policy`; policy changes cannot replace the payload or undo a
+revocation. Older installed loaders retain their previous expiry behavior.
 
 ### 3. Start the service and upload
 
@@ -91,7 +99,10 @@ configuration or expose the development service directly on the public Internet.
 | `POST /v1/releases` | Bearer-authenticated JSON upload of base64 `envelope` and `artifact`; verifies signature/hash, commits blob then latest pointer; 201 |
 | `GET /v1/check?baselineId=SHA256` | Exact baseline's canonical signed envelope, or JSON `null`; 200 |
 | `GET /v1/blobs/SHA256` | Content-addressed bytecode; client validates signed size/hash before install |
-| `POST /v1/reports` | Bounded `{baselineId, patchId, outcome}` observation; appends server timestamp to `reports.jsonl`; 202 |
+| `POST /v1/reports` | Bounded `{eventId, baselineId, patchId, outcome}` observation, deduplicated by event ID; 202 (legacy three-field reports remain accepted) |
+| `GET /v1/withdrawals?baselineId=SHA256` | Persisted signed withdrawal envelopes, including those older than the latest release |
+| `POST /v1/pause` | Bearer-authenticated `{baselineId, paused}`; stops/resumes new offers, not installed code; 204 |
+| `GET /v1/stats` | Bearer-authenticated event counts, not unique users or authoritative success rates |
 
 Upload limits: 16 KiB signed envelope, 8 MiB artifact. Unauthorized upload returns
 401, invalid signature/content 422, conflicting immutable envelope 409. Latest
@@ -126,11 +137,15 @@ instead of Flutter module execution. Device evidence separately proves AOT/DBC3
 execution. It checks auth, upload retry, corruption, wrong baseline, signatures,
 offline fail-open, next-start-only activation and server receipt of reports.
 
-Deliberately deferred: management website, cloud storage, rollout buckets,
-server-driven withdrawal, multi-process publication, key rotation UI, resumable
-downloads and production rate limiting. Reports are unauthenticated observations
-and never control activation; they contain no user/device identifier. Reporting
-is best effort (no persistent offline outbox or crash-report retry), and the
-collector rejects further reports after its log exceeds 10 MiB. Successful
-startup is reported; fatal process crashes still rely on existing local recovery.
-Add durable telemetry and lifecycle management before production deployment.
+Deliberately deferred: management website, cloud storage, multi-process
+publication, key rotation UI, range-resumable downloads and production rate
+limiting. Interrupted downloads retry one complete request. Reports persist in a
+128-event outbox and retry at the next post-health check/startup of the same base;
+event IDs deduplicate retries across collector restarts. They remain untrusted
+observations with no user/device ID and never control activation. A full outbox
+refuses new telemetry without blocking app health; the collector returns 507 after
+its log exceeds 10 MiB. Signed withdrawals are capped at 64 / 128 KiB per baseline.
+Received withdrawal is permanent for that patch ID; offline clients cannot learn
+a new withdrawal. Current-session code is not forcibly changed. Production needs
+capacity/abuse controls, deployment hardening and the remaining security work in
+[SECURITY.md](../SECURITY.md).
