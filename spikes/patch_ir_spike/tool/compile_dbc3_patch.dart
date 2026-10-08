@@ -135,6 +135,8 @@ Future<void> compileBaseline({
   Uri? packagesFileUri,
   Uri? genSnapshotUri,
   Set<Uri> retainedLibraries = const {},
+  List<Uri> additionalSources = const [],
+  Uri? patchRoot,
   Map<String, String> environmentDefines = const {},
 }) async {
   if (File('${output.path}/release.json').existsSync()) {
@@ -153,8 +155,10 @@ Future<void> compileBaseline({
     'HOTFIX_NATIVE_STORE':
         Platform.environment['HOTFIX_NATIVE_STORE'] ?? 'false',
     'HOTFIX_UPDATE_ORIGIN': Platform.environment['HOTFIX_UPDATE_ORIGIN'] ?? '',
-    'HOTFIX_ALLOW_DEV_HTTP': Platform.environment['HOTFIX_ALLOW_DEV_HTTP'] ?? 'false',
-    'HOTFIX_APP_ID': Platform.environment['HOTFIX_APP_ID'] ?? 'dev.hotfixruntime.fixture',
+    'HOTFIX_ALLOW_DEV_HTTP':
+        Platform.environment['HOTFIX_ALLOW_DEV_HTTP'] ?? 'false',
+    'HOTFIX_APP_ID':
+        Platform.environment['HOTFIX_APP_ID'] ?? 'dev.hotfixruntime.fixture',
     'HOTFIX_PLATFORM': Platform.environment['HOTFIX_PLATFORM'] ?? 'host',
     ...environmentDefines,
   };
@@ -174,6 +178,7 @@ Future<void> compileBaseline({
   final result = await compileToKernel(
     KernelCompilationArguments(
       source: entryUri,
+      additionalSources: additionalSources,
       options: options,
       includePlatform: true,
       enableAsserts: false,
@@ -183,15 +188,43 @@ Future<void> compileBaseline({
   final component = result.component;
   if (component == null || errors.hasCompilationErrors)
     throw StateError('frontend failed');
-  final baseline = component.libraries.singleWhere(
-    (lib) => lib.fileUri == baselineUri,
-  );
-  _checkPatchable(baseline);
+  final baselines =
+      component.libraries
+          .where(
+            (lib) => patchRoot == null
+                ? lib.fileUri == baselineUri
+                : lib.fileUri.toString().startsWith(patchRoot.toString()),
+          )
+          .toList()
+        ..sort(
+          (a, b) => a.importUri.toString().compareTo(b.importUri.toString()),
+        );
+  if (baselines.isEmpty) throw const FormatException('No patchable libraries');
+  final baseline = baselines.first;
+  if (patchRoot != null) {
+    final references = _ReferenceLibraries();
+    for (final lib in baselines) {
+      lib.accept(references);
+    }
+    retainedLibraries = {...retainedLibraries, ...references.uris};
+  }
+  for (final lib in baselines) {
+    _checkPatchable(lib);
+  }
   final core = CoreTypes(component);
-  final previous = _methods(baseline);
+  final previous = {
+    for (final lib in baselines)
+      for (final p in _methods(lib).values) _qualifiedKey(p): p,
+  };
   final ids = {
     for (final entry in previous.entries)
-      entry.value: _id(Uri.parse(logicalLibraryUri), entry.key, entry.value),
+      entry.value: _id(
+        baselines.length == 1
+            ? Uri.parse(logicalLibraryUri)
+            : entry.value.enclosingLibrary.importUri,
+        _key(entry.value),
+        entry.value,
+      ),
   };
   final baseInput = '${output.path}/baseline.input.dill';
   await writeComponentToBinary(component, baseInput);
@@ -204,6 +237,20 @@ Future<void> compileBaseline({
     'baselineKernelSha256': await _digestFile(File(baseInput)),
     'logicalLibraryUri': logicalLibraryUri,
     'baselineLibraryUri': baseline.importUri.toString(),
+    'baselineLibraryUris': baselines
+        .map((lib) => lib.importUri.toString())
+        .toList(),
+    'multiLibrary': patchRoot != null,
+    'patchSourceUris':
+        component.uriToSource.keys
+            .where(
+              (uri) =>
+                  patchRoot != null &&
+                  uri.toString().startsWith(patchRoot.toString()),
+            )
+            .map((uri) => uri.toString())
+            .toList()
+          ..sort(),
     'entryUri': entryUri.toString(),
     'targetName': targetName,
     'retainedLibraries': retainedLibraries.map((uri) => uri.toString()).toList()
@@ -214,7 +261,8 @@ Future<void> compileBaseline({
       .convert(utf8.encode(jsonEncode(buildRecipe)))
       .toString();
   final hooks = component.libraries.singleWhere(
-    (lib) => lib.fileUri.path.endsWith('/patch_hook.dart') &&
+    (lib) =>
+        lib.fileUri.path.endsWith('/patch_hook.dart') &&
         lib.procedures.any((p) => p.name.text == 'hotfixHasPatch'),
   );
   final hasPatch = hooks.procedures.singleWhere(
@@ -296,7 +344,8 @@ Future<void> compileBaseline({
     );
   }
   final runtime = component.libraries.singleWhere(
-    (lib) => lib.fileUri.path.endsWith('/dbc3_dispatch.dart') &&
+    (lib) =>
+        lib.fileUri.path.endsWith('/dbc3_dispatch.dart') &&
         lib.fields.any((f) => f.name.text == 'baselinePatchIds'),
   );
   final idField = runtime.fields.singleWhere(
@@ -340,27 +389,34 @@ Future<void> compileBaseline({
       jsonEncode({
         'callable': [
           for (final uri in retainedLibraries) {'library': uri.toString()},
-          {'library': baseline.importUri.toString()},
+          for (final lib in baselines) {'library': lib.importUri.toString()},
           // Library-wide annotation skips private declarations. Retain them
           // explicitly so a future patch can call a previously unused member.
-          for (final klass in baseline.classes) ...[
-            {'library': baseline.importUri.toString(), 'class': klass.name},
-            for (final member in [
-              ...klass.constructors,
-              ...klass.procedures,
-              ...klass.fields,
-            ])
+          for (final lib in baselines)
+            for (final klass in lib.classes) ...[
+              {'library': lib.importUri.toString(), 'class': klass.name},
+              for (final member
+                  in [
+                    ...klass.constructors,
+                    ...klass.procedures,
+                    ...klass.fields,
+                  ].where(
+                    (member) =>
+                        !_generatedEnumMember(member) &&
+                        (!member.name.isPrivate || member.name.library == lib),
+                  ))
+                {
+                  'library': lib.importUri.toString(),
+                  'class': klass.name,
+                  'member': _interfaceName(member),
+                },
+            ],
+          for (final lib in baselines)
+            for (final member in [...lib.procedures, ...lib.fields])
               {
-                'library': baseline.importUri.toString(),
-                'class': klass.name,
-                'member': member.name.text,
+                'library': lib.importUri.toString(),
+                'member': _interfaceName(member),
               },
-          ],
-          for (final member in [...baseline.procedures, ...baseline.fields])
-            {
-              'library': baseline.importUri.toString(),
-              'member': member.name.text,
-            },
         ],
       }),
     );
@@ -437,6 +493,11 @@ Future<void> compilePatch({
   }
   final candidateFile = File.fromUri(updatedUri);
   final baselineUri = Uri.parse(recipe['baselineLibraryUri'] as String);
+  final baselineUris =
+      (recipe['baselineLibraryUris'] as List? ?? [baselineUri.toString()])
+          .cast<String>()
+          .map(Uri.parse)
+          .toList();
   // CFE must see the candidate's original URI so URI-based `part of` directives
   // retain their ownership. Temporarily rename only the frozen Kernel library,
   // in memory; source files and the archived release are never rewritten.
@@ -445,12 +506,15 @@ Future<void> compilePatch({
     baseInput.readAsBytesSync(),
     disableLazyReading: true,
   ).readComponent(frozenComponent);
-  final frozenLibrary = frozenComponent.libraries.singleWhere(
-    (library) => library.importUri == baselineUri,
-  );
-  final frozenLibraryUri = Uri.parse('hotfix-baseline:$buildId/business.dart');
+  final frozenUris = <Uri, Uri>{
+    for (var i = 0; i < baselineUris.length; i++)
+      baselineUris[i]: Uri.parse('hotfix-baseline:$buildId/library_$i.dart'),
+  };
   frozenComponent.unbindCanonicalNames();
-  frozenLibrary.importUri = frozenLibraryUri;
+  for (final lib in frozenComponent.libraries) {
+    if (frozenUris.containsKey(lib.importUri))
+      lib.importUri = frozenUris[lib.importUri]!;
+  }
   frozenComponent.computeCanonicalNames();
   final memory = MemoryFileSystem(Uri.parse('hotfix-input:/'));
   final frozenInputUri = Uri.parse('hotfix-input:/baseline.dill');
@@ -474,7 +538,9 @@ Future<void> compilePatch({
     ..packagesFileUri = packages
     ..fileSystem = HybridFileSystem(
       memory,
-      _CandidateFileSystem(sourceFileUri, candidateFile.uri),
+      recipe['multiLibrary'] != true
+          ? _CandidateFileSystem(sourceFileUri, candidateFile.uri)
+          : StandardFileSystem.instance,
     )
     ..additionalDills = [frozenInputUri]
     ..target = target
@@ -482,6 +548,7 @@ Future<void> compilePatch({
   final result = await compileToKernel(
     KernelCompilationArguments(
       source: sourceUri,
+      additionalSources: baselineUris.skip(1).toList(),
       options: options,
       requireMain: false,
       includePlatform: true,
@@ -499,12 +566,12 @@ Future<void> compilePatch({
       .map(Uri.parse)
       .toSet();
   output.createSync(recursive: true);
-  final baseline = component.libraries.singleWhere(
-    (lib) => lib.importUri == frozenLibraryUri,
-  );
-  final updated = component.libraries.singleWhere(
-    (lib) => lib.importUri == baselineUri,
-  );
+  final pairs = <Library, Library>{
+    for (final uri in baselineUris)
+      component.libraries.singleWhere((lib) => lib.importUri == uri): component
+          .libraries
+          .singleWhere((lib) => lib.importUri == frozenUris[uri]),
+  };
   // Hash the actual sources used by CFE, including parts (even when the entry
   // file is unchanged), rather than re-reading only the entry from disk.
   final sourceUris = component.uriToSource.keys.toList()
@@ -524,24 +591,45 @@ Future<void> compilePatch({
   // Imported dill bodies are lazy; load them before changing canonical names.
   component.accept(RecursiveVisitor());
   component.unbindCanonicalNames();
-  updated.importUri = Uri.parse(
-    'hotfix-candidate:$sourceBundleSha256/business.dart',
-  );
-  baseline.importUri = baselineUri;
+  var libraryIndex = 0;
+  for (final pair in pairs.entries) {
+    final originalUri = pair.key.importUri;
+    pair.key.importUri = Uri.parse(
+      'hotfix-candidate:$sourceBundleSha256/library_${libraryIndex++}.dart',
+    );
+    pair.value.importUri = originalUri;
+  }
   component.computeCanonicalNames();
-  updatedUri = updated.importUri;
+  updatedUri = pairs.keys.first.importUri;
   final core = CoreTypes(component);
-  final previous = _methods(baseline);
-  final next = _methods(updated);
+  String candidateKey(Procedure p) =>
+      '${pairs[p.enclosingLibrary]!.importUri}::${_key(p)}';
+  final previous = {
+    for (final lib in pairs.values)
+      for (final p in _methods(lib).values) _qualifiedKey(p): p,
+  };
+  final next = {
+    for (final lib in pairs.keys)
+      for (final p in _methods(lib).values) candidateKey(p): p,
+  };
   final ids = {
     for (final e in previous.entries)
-      e.value: _id(Uri.parse(logicalLibraryUri), e.key, e.value),
+      e.value: _id(
+        pairs.length == 1
+            ? Uri.parse(logicalLibraryUri)
+            : e.value.enclosingLibrary.importUri,
+        _key(e.value),
+        e.value,
+      ),
   };
 
-  checkLibraryCompatibility(baseline, updated);
+  for (final pair in pairs.entries) {
+    checkLibraryCompatibility(pair.value, pair.key, libraryPairs: pairs);
+  }
   final classMap = {
-    for (final klass in updated.classes)
-      klass: baseline.classes.singleWhere((old) => old.name == klass.name),
+    for (final pair in pairs.entries)
+      for (final klass in pair.key.classes)
+        klass: pair.value.classes.singleWhere((old) => old.name == klass.name),
   };
   for (final e in previous.entries) {
     if (next[e.key] == null ||
@@ -549,8 +637,9 @@ Future<void> compilePatch({
       throw FormatException('existing method signature changed: ${e.key}');
     }
   }
-  _checkPatchable(baseline);
-  _checkPatchable(updated);
+  for (final lib in [...pairs.keys, ...pairs.values]) {
+    _checkPatchable(lib);
+  }
   final changed = <Procedure>[];
   for (final e in next.entries) {
     final old = previous[e.key];
@@ -558,8 +647,9 @@ Future<void> compilePatch({
         !methodsEqual(
           old,
           e.value,
-          baselineLibrary: baseline,
-          updatedLibrary: updated,
+          baselineLibrary: pairs[e.value.enclosingLibrary]!,
+          updatedLibrary: e.value.enclosingLibrary,
+          libraryPairs: pairs,
         )) {
       if (old == null && !e.value.isStatic)
         throw const FormatException('new instance method');
@@ -574,9 +664,16 @@ Future<void> compilePatch({
   final module = Library(moduleUri, fileUri: updatedUri)..parent = component;
   final implementations = <Procedure, Procedure>{};
   for (final original in changed) {
-    final key = _key(original);
+    final key = candidateKey(original);
     final id =
-        ids[previous[key]] ?? _id(Uri.parse(logicalLibraryUri), key, original);
+        ids[previous[key]] ??
+        _id(
+          pairs.length == 1
+              ? Uri.parse(logicalLibraryUri)
+              : pairs[original.enclosingLibrary]!.importUri,
+          _key(original),
+          original,
+        );
     final implementation = Procedure(
       Name('patch_$id'),
       ProcedureKind.Method,
@@ -601,8 +698,7 @@ Future<void> compilePatch({
             ),
           );
     final cloner = _PatchCloner(
-      updated,
-      baseline,
+      pairs,
       previous,
       implementations,
       receiver,
@@ -628,7 +724,7 @@ Future<void> compilePatch({
   }
   final exports = <MapLiteralEntry>[];
   for (final e in implementations.entries) {
-    final old = previous[_key(e.key)];
+    final old = previous[candidateKey(e.key)];
     if (old == null) continue; // New helpers remain private to this module.
     if (_patchTypeParameters(e.key).isNotEmpty) {
       exports.add(
@@ -736,7 +832,7 @@ Future<void> compilePatch({
   module.accept(
     _ModuleBoundary({
       module,
-      baseline,
+      ...pairs.values,
       ...component.libraries.where(
         (lib) => retainedLibraries.contains(lib.importUri),
       ),
@@ -761,12 +857,16 @@ Future<void> compilePatch({
       'baselineId': buildId,
       'baselineFunctions': ids.values.toList(),
       'changed': [
-        for (final p in changed.where((p) => previous.containsKey(_key(p))))
-          ids[previous[_key(p)]],
+        for (final p in changed.where(
+          (p) => previous.containsKey(candidateKey(p)),
+        ))
+          ids[previous[candidateKey(p)]],
       ],
       'newHelpers': [
-        for (final p in changed.where((p) => !previous.containsKey(_key(p))))
-          _key(p),
+        for (final p in changed.where(
+          (p) => !previous.containsKey(candidateKey(p)),
+        ))
+          candidateKey(p),
       ],
       'moduleLibraries': [moduleUri.toString()],
       'sourceBundleSha256': sourceBundleSha256,
@@ -788,6 +888,18 @@ class _CandidateFileSystem implements front_end_fs.FileSystem {
   @override
   front_end_fs.FileSystemEntity entityForUri(Uri uri) =>
       StandardFileSystem.instance.entityForUri(uri == alias ? source : uri);
+}
+
+/// Preserve callable API libraries already referenced by the business Kernel.
+/// New dependencies remain outside the frozen interface and require a new base.
+class _ReferenceLibraries extends RecursiveVisitor {
+  final uris = <Uri>{};
+  @override
+  void defaultMemberReference(Member node) =>
+      uris.add(node.enclosingLibrary.importUri);
+  @override
+  void visitClassReference(Class node) =>
+      uris.add(node.enclosingLibrary.importUri);
 }
 
 FunctionType _patchAbi(Procedure procedure, CoreTypes core) {
@@ -849,10 +961,31 @@ List<TypeParameter> _patchTypeParameters(Procedure procedure) => [
 
 String _key(Procedure p) =>
     '${p.enclosingClass?.name ?? ''}::${p.kind.name}::${p.name.text}';
+String _qualifiedKey(Procedure p) =>
+    '${p.enclosingLibrary.importUri}::${_key(p)}';
+// CFE synthesizes this member; the dynamic-interface source resolver cannot name it.
+bool _generatedEnumMember(Member p) =>
+    p.enclosingClass?.isEnum == true && p.name.text == '_enumToString';
+String _interfaceName(Member member) =>
+    member is Procedure &&
+        (member.kind == ProcedureKind.Getter ||
+            member.kind == ProcedureKind.Setter)
+    ? '${member.kind == ProcedureKind.Getter ? 'get' : 'set'}:${member.name.text}'
+    : member.name.text;
 Map<String, Procedure> _methods(Library lib) => {
   for (final klass in lib.classes)
-    for (final p in klass.procedures.where((p) => !p.isSynthetic)) _key(p): p,
-  for (final p in lib.procedures.where((p) => !p.isSynthetic)) _key(p): p,
+    for (final p in klass.procedures.where(
+      (p) =>
+          !p.isSynthetic &&
+          !p.isAbstract &&
+          !p.isExternal &&
+          !_generatedEnumMember(p),
+    ))
+      _key(p): p,
+  for (final p in lib.procedures.where(
+    (p) => !p.isSynthetic && !p.isAbstract && !p.isExternal,
+  ))
+    _key(p): p,
 };
 String _id(Uri library, String key, Procedure p) => sha256
     .convert(utf8.encode('$library::$key::${functionSignature(p)}'))
@@ -861,25 +994,34 @@ String _id(Uri library, String key, Procedure p) => sha256
 
 class _PatchCloner extends CloneVisitorNotMembers {
   _PatchCloner(
-    this.updated,
-    this.baselineLibrary,
+    this.libraries,
     this.baseline,
     this.implementations,
     this.receiver,
     Map<Class, Class> classes,
   ) : types = _Types(classes);
-  final Library updated;
-  final Library baselineLibrary;
+  final Map<Library, Library> libraries;
   final Map<String, Procedure> baseline;
   final Map<Procedure, Procedure> implementations;
   final VariableDeclaration? receiver;
   final _Types types;
 
   Member _member(Member member) {
-    if (member.enclosingLibrary != updated) return member;
+    final baselineLibrary = libraries[member.enclosingLibrary];
+    if (baselineLibrary == null) return member;
     if (member is Procedure) {
-      final target = baseline[_key(member)] ?? implementations[member];
+      final target =
+          baseline['${baselineLibrary.importUri}::${_key(member)}'] ??
+          implementations[member];
       if (target != null) return target;
+      if (member.isAbstract || member.isExternal) {
+        final owner = member.enclosingClass == null
+            ? null
+            : types.classes[member.enclosingClass]!;
+        return (owner?.procedures ?? baselineLibrary.procedures).singleWhere(
+          (p) => _key(p) == _key(member),
+        );
+      }
     } else {
       final owner = member.enclosingClass == null
           ? null
@@ -896,8 +1038,8 @@ class _PatchCloner extends CloneVisitorNotMembers {
     throw FormatException('unresolved member: ${member.name}');
   }
 
-  Name _name(Name name) => name.isPrivate && name.library == updated
-      ? Name(name.text, baselineLibrary)
+  Name _name(Name name) => name.isPrivate && libraries.containsKey(name.library)
+      ? Name(name.text, libraries[name.library])
       : name;
 
   @override
@@ -937,6 +1079,13 @@ class _PatchCloner extends CloneVisitorNotMembers {
   @override
   TreeNode visitStaticTearOff(StaticTearOff node) =>
       StaticTearOff(_member(node.target) as Procedure);
+
+  @override
+  TreeNode visitInstanceTearOff(InstanceTearOff node) => InstanceTearOff(
+    node.kind, clone(node.receiver), _name(node.name),
+    interfaceTarget: _member(node.interfaceTarget) as Procedure,
+    resultType: visitType(node.resultType),
+  );
 
   @override
   TreeNode visitInstanceGet(InstanceGet node) => InstanceGet(

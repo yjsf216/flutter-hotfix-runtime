@@ -10,8 +10,13 @@ bool methodsEqual(
   Procedure after, {
   required Library baselineLibrary,
   required Library updatedLibrary,
+  Map<Library, Library> libraryPairs = const {},
 }) {
-  final visitor = _Comparison(baselineLibrary, updatedLibrary);
+  final visitor = _Comparison(
+    baselineLibrary,
+    updatedLibrary,
+    libraryPairs: libraryPairs,
+  );
   visitor.seedLocals(before.function, after.function);
   final beforeClass = before.enclosingClass;
   final afterClass = after.enclosingClass;
@@ -30,12 +35,14 @@ bool methodsEqual(
 /// Constructors and field initializers remain strict because they are not patched.
 void checkLibraryCompatibility(
   Library baselineLibrary,
-  Library updatedLibrary,
-) {
+  Library updatedLibrary, {
+  Map<Library, Library> libraryPairs = const {},
+}) {
   final visitor = _Comparison(
     baselineLibrary,
     updatedLibrary,
     compatibility: true,
+    libraryPairs: libraryPairs,
   );
   visitor.checkNodes(baselineLibrary, updatedLibrary, 'library');
   final result = visitor.toResult();
@@ -83,33 +90,71 @@ class _Declarations extends RecursiveVisitor {
   }
 }
 
-class _Comparison extends EquivalenceVisitor {
-  final Library baseline;
-  final Library updated;
+final _bindingCache = Expando<_Bindings>();
 
-  _Comparison(this.baseline, this.updated, {bool compatibility = false})
-    : super(strategy: _Strategy(compatibility)) {
-    final left = _Declarations();
-    final right = _Declarations();
-    baseline.accept(left);
-    updated.accept(right);
-    for (final entry in left.named.entries) {
-      final other = right.named[entry.key];
-      if (other == null) continue;
-      assumeReferences(entry.value.reference, other.reference);
-      if (entry.value is Field && other is Field) {
-        final field = entry.value as Field;
-        assumeReferences(field.getterReference, other.getterReference);
-        assumeReferences(field.setterReference, other.setterReference);
-      }
-      if (entry.value is Class && other is Class) {
-        seedTypeParameters(
-          (entry.value as Class).typeParameters,
-          other.typeParameters,
-        );
+class _Bindings {
+  final references = <Reference, Reference>{};
+  final declarations = <TypeParameter, TypeParameter>{};
+  _Bindings(Map<Library, Library> pairs) {
+    for (final pair in pairs.entries) {
+      final left = _Declarations();
+      final right = _Declarations();
+      pair.value.accept(left);
+      pair.key.accept(right);
+      for (final entry in left.named.entries) {
+        final other = right.named[entry.key];
+        if (other == null) continue;
+        references[entry.value.reference] = other.reference;
+        if (entry.value is Field && other is Field) {
+          final field = entry.value as Field;
+          references[field.getterReference] = other.getterReference;
+          final setter = field.setterReference;
+          final otherSetter = other.setterReference;
+          if (setter != null && otherSetter != null)
+            references[setter] = otherSetter;
+        }
+        if (entry.value is Class && other is Class) {
+          final parameters = (entry.value as Class).typeParameters;
+          for (
+            var i = 0;
+            i < parameters.length && i < other.typeParameters.length;
+            i++
+          ) {
+            declarations[parameters[i]] = other.typeParameters[i];
+          }
+        }
       }
     }
   }
+}
+
+class _Comparison extends EquivalenceVisitor {
+  final Library baseline;
+  final Library updated;
+  late final _Bindings bindings;
+
+  _Comparison(
+    this.baseline,
+    this.updated, {
+    bool compatibility = false,
+    Map<Library, Library> libraryPairs = const {},
+  }) : super(strategy: _Strategy(compatibility)) {
+    bindings = libraryPairs.isEmpty
+        ? _Bindings({updated: baseline})
+        : (_bindingCache[libraryPairs] ??= _Bindings(libraryPairs));
+  }
+
+  @override
+  bool checkAssumedReferences(Reference? a, Reference? b) =>
+      a != null && b != null && bindings.references[a] == b ||
+      super.checkAssumedReferences(a, b);
+
+  @override
+  bool checkAssumedDeclarations(dynamic a, dynamic b) =>
+      a is TypeParameter &&
+          b is TypeParameter &&
+          bindings.declarations[a] == b ||
+      super.checkAssumedDeclarations(a, b);
 
   void seedTypeParameters(
     List<TypeParameter> before,
@@ -132,6 +177,9 @@ class _Comparison extends EquivalenceVisitor {
 
   @override
   bool checkValues<T>(T? a, T? b, String propertyName) {
+    // Kernel Member documents these as nonserialized optimization hints that
+    // may contain false positives. Bodies, initializers and ABI stay checked.
+    if (propertyName == 'transformerFlags') return true;
     // These are diagnostic/serialization positions, never executable values.
     if (const {
       'fileUri',
@@ -170,6 +218,36 @@ class _Comparison extends EquivalenceVisitor {
 class _Strategy extends EquivalenceStrategy {
   final bool compatibility;
   const _Strategy(this.compatibility);
+
+  @override
+  bool checkLibrary_additionalExports(
+    EquivalenceVisitor visitor,
+    Library node,
+    Library other,
+  ) {
+    if (!visitor.checkValues(
+      node.additionalExports.length,
+      other.additionalExports.length,
+      'additionalExports.length',
+    ))
+      return false;
+    final remaining = List<Reference>.of(other.additionalExports);
+    // ponytail: small export groups use matching; canonical-key multisets if large barrels become a bottleneck.
+    for (final reference in node.additionalExports) {
+      final index = remaining.indexWhere(
+        (candidate) => visitor.matchReferences(reference, candidate),
+      );
+      if (index < 0) {
+        visitor.registerInequivalence(
+          'additionalExports',
+          'Export target changed: $reference',
+        );
+        return false;
+      }
+      remaining.removeAt(index);
+    }
+    return true;
+  }
 
   @override
   bool checkName(EquivalenceVisitor visitor, Name? node, Object? other) {

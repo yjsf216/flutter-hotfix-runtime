@@ -66,9 +66,50 @@ void incompatible(String label, void Function(Library) change) {
 }
 
 void main() {
+  final exportBefore = fixture('exportBefore');
+  final exportAfter = fixture('exportAfter');
+  final external = fixture('exported');
+  exportBefore.additionalExports.addAll([
+    external.classes.single.reference,
+    method(exportBefore).reference,
+  ]);
+  exportAfter.additionalExports.addAll([
+    method(exportAfter).reference,
+    external.classes.single.reference,
+  ]);
+  checkLibraryCompatibility(exportBefore, exportAfter);
+  for (final changed in [
+    [
+      method(exportAfter).reference,
+      fixture('different').classes.single.reference,
+    ],
+    [method(exportAfter).reference],
+    [
+      method(exportAfter).reference,
+      external.classes.single.reference,
+      external.classes.single.reference,
+    ],
+  ]) {
+    exportAfter.additionalExports
+      ..clear()
+      ..addAll(changed);
+    var rejected = false;
+    try {
+      checkLibraryCompatibility(exportBefore, exportAfter);
+    } on FormatException {
+      rejected = true;
+    }
+    check(rejected, 'export replacement/removal/addition accepted');
+  }
+  print(
+    'PASS: export ordering ignored, target changes and multiplicity rejected',
+  );
   final before = fixture('before');
   final after = fixture('after');
   method(after).fileOffset = 900;
+  method(after).transformerFlags = 1;
+  after.classes.single.constructors.single.transformerFlags = 1;
+  after.classes.single.fields.single.transformerFlags = 1;
   method(after).fileStartOffset = 890;
   method(after).fileEndOffset = 990;
   method(after).function.fileEndOffset = 980;
