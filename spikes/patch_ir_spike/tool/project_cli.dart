@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:yaml/yaml.dart';
 import 'compile_dbc3_patch.dart' as compiler;
+import 'git_workflow.dart';
 
 final repo = File.fromUri(Platform.script).parent.parent.parent.parent;
 String hash(File f) => sha256.convert(f.readAsBytesSync()).toString();
@@ -10,6 +11,19 @@ Never fail(String message) => throw FormatException(message);
 String env(String name) =>
     Platform.environment[name] ?? (throw ArgumentError('$name required'));
 File file(String path) => File(path).absolute;
+Map<String, String> appDefines(Map<String, dynamic> config) {
+  final values = Map<String, String>.from(config['dartDefines'] as Map? ?? {});
+  for (final key in values.keys) {
+    if (key.isEmpty ||
+        key.startsWith('dart.') ||
+        key.startsWith('flutter.') ||
+        key.startsWith('HOTFIX_')) {
+      fail('dartDefines contains a reserved compiler/runtime key');
+    }
+  }
+  return values;
+}
+
 Future<void> run(String executable, List<String> args) async {
   final p = await Process.start(
     executable,
@@ -52,6 +66,7 @@ Map<String, String> sourceHashes(Directory project) {
               'build',
               'Pods',
               '.gradle',
+              '.kotlin',
               '.cxx',
               '.symlinks',
               'ephemeral',
@@ -83,6 +98,7 @@ Map<String, String> sourceHashes(Directory project) {
     'pubspec.yaml',
     'pubspec.lock',
     '.dart_tool/package_config.json',
+    '.dart_tool/flutter_build/dart_plugin_registrant.dart',
   ]) {
     final f = File('${project.path}/$name');
     if (f.existsSync()) result[name] = hash(f);
@@ -91,10 +107,14 @@ Map<String, String> sourceHashes(Directory project) {
 }
 
 void checkSources(Map<String, dynamic> metadata) {
-  final before = Map<String, String>.from(metadata['sources'] as Map)
-    ..remove(metadata['patchLibrary']);
-  final current = sourceHashes(Directory(metadata['project'] as String))
-    ..remove(metadata['patchLibrary']);
+  final before = Map<String, String>.from(metadata['sources'] as Map);
+  final current = sourceHashes(Directory(metadata['project'] as String));
+  for (final path in patchPaths(metadata)) {
+    if (!before.containsKey(path) || !current.containsKey(path))
+      fail('Patch source added or deleted: $path');
+    before.remove(path);
+    current.remove(path);
+  }
   if (before.length != current.length ||
       before.entries.any((e) => current[e.key] != e.value)) {
     fail(
@@ -112,16 +132,84 @@ Future<void> main(List<String> args) async {
   }
 }
 
-Future<void> command(List<String> args) async {
+Future<void> command(List<String> args, {bool projectPatch = false}) async {
   if (args.isEmpty || args.first == '--help') {
     print(
       'hotfix release CONFIG OUTPUT\nhotfix patch BASELINE UPDATED_LIBRARY OUTPUT\n'
+      'hotfix release-git CONFIG OUTPUT\nhotfix patch-git BASELINE REF OUTPUT\n'
       'hotfix sign BASELINE PATCH_DIR KEY_DIR PATCH_ID\nhotfix publish ORIGIN MANIFEST BYTECODE\n'
       'hotfix serve STORAGE PUBLIC_KEY_FILE\nToolchains: DART_BIN, DART_SDK_SOURCE, FLUTTER_SDK, GEN_SNAPSHOT',
+    );
+    print(
+      'hotfix policy BASELINE PATCH_DIR KEY_DIR OUTPUT PERCENT|withdraw\n'
+      'hotfix pause ORIGIN BASELINE_ID true|false\nhotfix stats ORIGIN',
     );
     return;
   }
   final action = args.first;
+  if ({'policy', 'pause', 'stats'}.contains(action)) {
+    await run(Platform.resolvedExecutable, [
+      '${repo.path}/spikes/patch_ir_spike/tool/delivery_control.dart',
+      ...args,
+    ]);
+    return;
+  }
+  if (action == 'release-git' && args.length == 3) {
+    final configFile = file(args[1]);
+    final config = json(configFile);
+    final project = Directory.fromUri(
+      configFile.parent.uri.resolve(config['project'] as String),
+    );
+    final commit = await cleanGitHead(project);
+    await command(['release', ...args.skip(1)]);
+    if (await cleanGitHead(project) != commit)
+      fail('Git checkout changed during build');
+    final metadataFile = file('${args[2]}/project.json');
+    write(metadataFile, {...json(metadataFile), 'gitCommit': commit});
+    print('PASS: Git baseline $commit');
+    return;
+  }
+  if (action == 'patch-git' && args.length == 4) {
+    final metadata = json(file('${args[1]}/project.json'));
+    final commit = await checkGitPatch(metadata, args[2]);
+    checkSources(metadata);
+    final project = Directory(metadata['project'] as String);
+    final before = sourceHashes(project);
+    final pending = file('${args[3]}.git-pending');
+    if (pending.existsSync() || Directory(args[3]).existsSync())
+      fail('Use a fresh patch output');
+    pending.parent.createSync(recursive: true);
+    pending.writeAsStringSync('Git patch validation incomplete\n', flush: true);
+    await command([
+      'patch',
+      args[1],
+      '${project.path}/${metadata['patchLibrary']}',
+      args[3],
+    ], projectPatch: true);
+    final after = sourceHashes(project);
+    if (await cleanGitHead(project) != commit ||
+        before.length != after.length ||
+        before.entries.any((e) => after[e.key] != e.value)) {
+      fail('Sources changed during compilation; discard this patch output');
+    }
+    write(file('${args[3]}/git-provenance.json'), {
+      'baselineCommit': metadata['gitCommit'],
+      'sourceCommit': commit,
+      'patchLibrary': metadata['patchLibrary'],
+      'patchableFiles': patchPaths(metadata),
+      'changedFiles': (await git(project, [
+        'diff',
+        '--no-renames',
+        '--name-only',
+        '-z',
+        metadata['gitCommit'] as String,
+        commit,
+        '--',
+      ])).split('\u0000').where((path) => path.isNotEmpty).toList(),
+    });
+    pending.deleteSync();
+    return;
+  }
   if (action == 'publish' && args.length == 4 ||
       action == 'serve' && args.length == 3) {
     await run(Platform.resolvedExecutable, [
@@ -131,6 +219,8 @@ Future<void> command(List<String> args) async {
     return;
   }
   if (action == 'sign' && args.length == 5) {
+    if (file('${args[2]}.git-pending').existsSync())
+      fail('Git patch validation incomplete; generate a fresh patch');
     final base = Directory(args[1]).absolute;
     final metadata = json(File('${base.path}/project.json'));
     final recipe = json(File('${base.path}/release/release.json'));
@@ -202,7 +292,11 @@ Future<void> command(List<String> args) async {
       ).resolveSymbolicLinksSync(),
     );
     final entry = config['entry'] as String;
-    final library = config['patchLibrary'] as String;
+    final allLibraries =
+        config['patchScope'] == 'lib' || config['patchLibrary'] == null;
+    if (config['patchScope'] != null && config['patchScope'] != 'lib')
+      fail('Only patchScope lib is supported');
+    final library = config['patchLibrary'] as String? ?? entry;
     for (final path in [entry, library]) {
       if (!path.startsWith('lib/') ||
           path.contains('..') ||
@@ -232,6 +326,15 @@ Future<void> command(List<String> args) async {
     final packages = File('${project.path}/.dart_tool/package_config.json');
     output.createSync(recursive: true);
     final release = Directory('${output.path}/release');
+    final registrant = File(
+      '${project.path}/.dart_tool/flutter_build/dart_plugin_registrant.dart',
+    );
+    final registrationSources = registrant.existsSync()
+        ? [
+            registrant.uri,
+            Uri.parse('package:flutter/src/dart_plugin_registrant.dart'),
+          ]
+        : <Uri>[];
     await compiler.compileBaseline(
       sdk: sdk,
       baselineUri: project.uri.resolve(library),
@@ -241,11 +344,17 @@ Future<void> command(List<String> args) async {
       platformDillUri: platform.uri,
       packagesFileUri: packages.uri,
       genSnapshotUri: generator.uri,
+      additionalSources: registrationSources,
+      patchRoot: allLibraries ? project.uri.resolve('lib/') : null,
       retainedLibraries: {
+        ...registrationSources,
         Uri.parse('dart:ui'),
         Uri.parse('package:flutter/src/widgets/framework.dart'),
       },
       environmentDefines: {
+        ...appDefines(config),
+        if (registrant.existsSync())
+          'flutter.dart_plugin_registrant': registrant.uri.toString(),
         'HOTFIX_APP_ID': config['appId'] as String,
         'HOTFIX_PLATFORM': config['platform'] as String,
         'HOTFIX_RELEASE': config['release'] as String,
@@ -256,6 +365,31 @@ Future<void> command(List<String> args) async {
       },
     );
     final ios = config['platform'] == 'ios';
+    if (allLibraries) {
+      final check = Directory('${output.path}/.unchanged-check');
+      var unchanged = false;
+      try {
+        try {
+          await compiler.compilePatch(
+            sdk: sdk,
+            release: release,
+            updatedUri: project.uri.resolve(library),
+            output: check,
+            platformDillUri: platform.uri,
+            packagesFileUri: packages.uri,
+            genSnapshotUri: generator.uri,
+          );
+        } on FormatException catch (error) {
+          if (error.message != 'no changed functions') rethrow;
+          unchanged = true;
+        }
+        if (!unchanged || File('${check.path}/patch.bytecode').existsSync())
+          fail('Unchanged baseline unexpectedly produced a patch');
+        print('PASS: unchanged multi-library baseline comparison');
+      } finally {
+        if (check.existsSync()) check.deleteSync(recursive: true);
+      }
+    }
     await run(generator.path, [
       '--snapshot-kind=${ios ? 'app-aot-assembly' : 'app-aot-elf'}',
       '--${ios ? 'assembly' : 'elf'}=${output.path}/${ios ? 'snapshot.S' : 'libapp.so'}',
@@ -270,6 +404,22 @@ Future<void> command(List<String> args) async {
     }
     write(File('${output.path}/project.json'), {
       ...config,
+      'patchLibrary': library,
+      if (allLibraries)
+        'patchLibraries':
+            ((json(File('${release.path}/release.json'))['buildRecipe']
+                        as Map)['patchSourceUris']
+                    as List)
+                .cast<String>()
+                .map(Uri.parse)
+                .map(
+                  (uri) => uri.toFilePath().substring(project.path.length + 1),
+                )
+                .where(
+                  (path) => path.endsWith('.dart') && sources.containsKey(path),
+                )
+                .toList()
+              ..sort(),
       'project': project.path,
       'sources': sources,
       'generatorSha256': hash(generator),
@@ -284,6 +434,11 @@ Future<void> command(List<String> args) async {
     if (metadata['schemaVersion'] != 1 ||
         metadata['generatorSha256'] != hash(generator))
       fail('baseline/toolchain mismatch');
+    if (metadata['patchLibraries'] != null && !projectPatch) {
+      fail(
+        'Multi-library baseline requires patch-git; external single-file candidates are not accepted',
+      );
+    }
     final project = Directory(metadata['project'] as String);
     checkSources(metadata);
     final output = Directory(args[3]).absolute;

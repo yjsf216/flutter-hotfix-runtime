@@ -6,6 +6,28 @@ void require(bool value, String message) {
 }
 
 void main() {
+  require(
+    cli.appDefines({
+          'dartDefines': {'APP_CHANNEL': 'main64'},
+        })['APP_CHANNEL'] ==
+        'main64',
+    'app define lost',
+  );
+  for (final key in [
+    'dart.vm.product',
+    'flutter.dart_plugin_registrant',
+    'HOTFIX_NATIVE_STORE',
+  ]) {
+    var refused = false;
+    try {
+      cli.appDefines({
+        'dartDefines': {key: 'false'},
+      });
+    } on FormatException {
+      refused = true;
+    }
+    require(refused, 'reserved define accepted');
+  }
   final project = Directory.systemTemp.createTempSync('project-cli-check.');
   try {
     Directory('${project.path}/lib').createSync();
@@ -22,6 +44,12 @@ void main() {
       ..writeAsStringSync('original');
     final native = File('${project.path}/android/build.gradle')
       ..writeAsStringSync('original');
+    Directory(
+      '${project.path}/.dart_tool/flutter_build',
+    ).createSync(recursive: true);
+    final registrant = File(
+      '${project.path}/.dart_tool/flutter_build/dart_plugin_registrant.dart',
+    )..writeAsStringSync('registered plugins');
     final metadata = <String, dynamic>{
       'project': project.path,
       'patchLibrary': 'lib/pricing.dart',
@@ -30,6 +58,13 @@ void main() {
     cli.checkSources(metadata);
     pricing.writeAsStringSync('patched');
     cli.checkSources(metadata);
+    final multiple = {
+      ...metadata,
+      'patchLibraries': ['lib/pricing.dart', 'lib/view.dart'],
+    };
+    other.writeAsStringSync('multi-file change');
+    cli.checkSources(multiple);
+    other.writeAsStringSync('unchanged');
     void rejected(void Function() mutate, void Function() restore) {
       mutate();
       var denied = false;
@@ -59,6 +94,10 @@ void main() {
       () => native.writeAsStringSync('original'),
     );
     final added = File('${project.path}/lib/added.dart');
+    rejected(
+      () => registrant.writeAsStringSync('different plugins'),
+      () => registrant.writeAsStringSync('registered plugins'),
+    );
     rejected(
       () => added.writeAsStringSync('new library'),
       () => added.deleteSync(),
