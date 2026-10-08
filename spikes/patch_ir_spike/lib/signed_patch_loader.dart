@@ -21,7 +21,12 @@ final class SignedPatchLoader {
     required this.verifier,
     NativeStoreIo? nativeIo,
   }) {
-    store = PatchStore(root, verifyManifest: _verifyStored, nativeIo: nativeIo);
+    store = PatchStore(
+      root,
+      verifyManifest: _verifyStored,
+      verifyHealthyManifest: _verifyHealthy,
+      nativeIo: nativeIo,
+    );
   }
 
   final SignedManifestVerifier verifier;
@@ -34,10 +39,14 @@ final class SignedPatchLoader {
 
   bool _verifyStored(String patchId, Uint8List envelope, Uint8List artifact) {
     final verified = verifier.verify(envelope);
-    // ponytail: only full rollout is implemented; partial selection needs a
-    // persistent privacy-preserving install bucket shared across restarts.
     return verified != null &&
-        verified.rolloutPercent == 100 &&
+        verified.patchId == patchId &&
+        verified.matchesArtifact(artifact);
+  }
+
+  bool _verifyHealthy(String patchId, Uint8List envelope, Uint8List artifact) {
+    final verified = verifier.verify(envelope, allowExpiredHealthy: true);
+    return verified != null &&
         verified.patchId == patchId &&
         verified.matchesArtifact(artifact);
   }
@@ -47,7 +56,7 @@ final class SignedPatchLoader {
       final envelope = _readSource(manifestPath, maxManifestBytes);
       if (envelope == null) return false;
       final manifest = verifier.verify(envelope);
-      if (manifest == null || manifest.rolloutPercent != 100) return false;
+      if (manifest == null || !eligible(manifest)) return false;
       final artifact = _readSource(modulePath, manifest.artifactSize);
       return artifact != null && stageBytes(envelope, artifact);
     } on Object {
@@ -59,10 +68,35 @@ final class SignedPatchLoader {
   /// them atomically. Installing does not activate a module in this process.
   bool stageBytes(Uint8List envelope, Uint8List artifact) {
     final manifest = verifier.verify(envelope);
-    return manifest != null && manifest.rolloutPercent == 100 &&
-        manifest.matchesArtifact(artifact) && store.install(
-          manifest.patchId, artifact, manifest.artifactSha256, manifest: envelope,
+    return manifest != null &&
+        eligible(manifest) &&
+        manifest.matchesArtifact(artifact) &&
+        store.install(
+          manifest.patchId,
+          artifact,
+          manifest.artifactSha256,
+          manifest: envelope,
         );
+  }
+
+  bool eligible(VerifiedManifest manifest) {
+    if (manifest.revoked) return false;
+    if (manifest.rolloutPercent == 100) return true;
+    if (manifest.rolloutPercent == 0) return false;
+    final bucket = store.rolloutBucket(manifest.baselineId, manifest.patchId);
+    return bucket != null && bucket < manifest.rolloutPercent;
+  }
+
+  bool withdrawSigned(Uint8List envelope) {
+    // Revocation is permanent for this immutable patch ID; replay cannot undo it.
+    final manifest = verifier.verify(
+      envelope,
+      allowRevocation: true,
+      allowExpiredHealthy: true,
+    );
+    return manifest != null &&
+        manifest.revoked &&
+        store.withdraw(manifest.patchId);
   }
 
   Uint8List? _readSource(String path, int limit) => store.nativeIo == null
@@ -80,6 +114,9 @@ final class SignedPatchLoader {
   }) async {
     final generation = ++_loadGeneration;
     var attempt = store.beginBootAttempt();
+    final incomplete = store.previousIncompleteBoot;
+    if (incomplete != null)
+      store.enqueueReport(verifier.baselineId, incomplete, 'startup_failed');
     if (attempt == null) {
       restoreBaseline();
       return null;
@@ -94,6 +131,11 @@ final class SignedPatchLoader {
       } on Object {
         // An older callback must not clear a later load's active dispatch.
         if (generation != _loadGeneration) return null;
+        store.enqueueReport(
+          verifier.baselineId,
+          attempt.patchId,
+          'startup_failed',
+        );
         final rejection = store.rejectBootAndBeginFallback(
           attempt,
           allowFallback: tried == 0,

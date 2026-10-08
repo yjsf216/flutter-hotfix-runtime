@@ -27,13 +27,15 @@ Future<LoadedPatch<void>?> bootSignedModule(List<String> paths) async {
   if (paths.length != 3)
     throw ArgumentError('module, manifest, store required');
   try {
+    // Patch IDs and blacklists belong to one frozen base, not every app upgrade.
+    final storeRoot = Directory('${paths[2]}/$baselineBuildId');
     _loader = SignedPatchLoader(
-      root: Directory(paths[2]),
+      root: storeRoot,
       nativeIo: const bool.fromEnvironment('HOTFIX_NATIVE_STORE')
           ? Platform.environment['HOTFIX_TEST_NATIVE_LIBRARY'] == null
-                ? NativeStoreIo.bundled(Directory(paths[2]))
+                ? NativeStoreIo.bundled(storeRoot)
                 : NativeStoreIo(
-                    Directory(paths[2]),
+                    storeRoot,
                     DynamicLibrary.open(
                       Platform.environment['HOTFIX_TEST_NATIVE_LIBRARY']!,
                     ),
@@ -66,10 +68,18 @@ Future<void> checkUpdatesAfterHealth(LoadedPatch<void>? patch) async {
   const origin = String.fromEnvironment('HOTFIX_UPDATE_ORIGIN');
   if (origin.isEmpty) return;
   try {
-    final delivery = UpdateClient(_loader, Uri.parse(origin),
-      allowDevelopmentHttp: const bool.fromEnvironment('HOTFIX_ALLOW_DEV_HTTP'));
-    await delivery.report(patch == null ? 'baseline_healthy' : 'patch_healthy', patch?.patchId);
-    final status = await delivery.checkAndDownload(runningPatchId: patch?.patchId);
+    final delivery = UpdateClient(
+      _loader,
+      Uri.parse(origin),
+      allowDevelopmentHttp: const bool.fromEnvironment('HOTFIX_ALLOW_DEV_HTTP'),
+    );
+    await delivery.report(
+      patch == null ? 'baseline_healthy' : 'patch_healthy',
+      patch?.patchId,
+    );
+    final status = await delivery.checkAndDownload(
+      runningPatchId: patch?.patchId,
+    );
     print('HotfixDelivery $status (takes effect on next startup)');
   } on Object catch (error) {
     print('HotfixDelivery unavailable: $error');

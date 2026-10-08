@@ -77,6 +77,7 @@ final class VerifiedManifest {
       artifactSize = manifest['artifactSize'] as int,
       keyId = manifest['keyId'] as String,
       rolloutPercent = manifest['rolloutPercent'] as int,
+      revoked = manifest['revoked'] as bool,
       identity = Map.unmodifiable(manifest['identity'] as Map<String, Object?>);
 
   final String patchId;
@@ -85,6 +86,7 @@ final class VerifiedManifest {
   final int artifactSize;
   final String keyId;
   final int rolloutPercent;
+  final bool revoked;
   final Map<String, Object?> identity;
 
   bool matchesArtifact(Uint8List bytes) =>
@@ -100,7 +102,9 @@ final class SignedManifestVerifier {
     required Map<String, Object?> releaseIdentity,
     required Map<String, Uint8List> publicKeys,
     Set<String> revokedKeyIds = const {},
+    DateTime Function()? clock,
   }) : releaseIdentity = Map.unmodifiable(releaseIdentity),
+       clock = clock ?? DateTime.now,
        _revokedKeyIds = Set.unmodifiable(revokedKeyIds) {
     if (!_identifierPattern.hasMatch(baselineId) ||
         !_validIdentity(releaseIdentity) ||
@@ -127,13 +131,19 @@ final class SignedManifestVerifier {
   }
 
   final String baselineId;
+  final DateTime Function() clock;
   final Map<String, Object?> releaseIdentity;
   final Set<String> _revokedKeyIds;
   final _publicKeys = <String, ECPublicKey>{};
 
   /// Null means fail closed for this candidate; callers can boot bundled AOT.
   /// Expiry is an additional filter, not a trusted anti-replay counter.
-  VerifiedManifest? verify(Uint8List envelopeBytes, {DateTime? now}) {
+  VerifiedManifest? verify(
+    Uint8List envelopeBytes, {
+    DateTime? now,
+    bool allowExpiredHealthy = false,
+    bool allowRevocation = false,
+  }) {
     try {
       if (envelopeBytes.isEmpty || envelopeBytes.length > maxManifestBytes) {
         return null;
@@ -192,15 +202,16 @@ final class SignedManifestVerifier {
           rollout is! int ||
           rollout < 0 ||
           rollout > 100 ||
-          manifest['revoked'] != false) {
+          manifest['revoked'] is! bool ||
+          manifest['revoked'] == true && !allowRevocation) {
         return null;
       }
       final issuedAt = _timestamp(manifest['issuedAt']);
       final expiresAt = _timestamp(manifest['expiresAt']);
-      final time = (now ?? DateTime.now()).toUtc();
+      final time = (now ?? clock()).toUtc();
       if (!expiresAt.isAfter(issuedAt) ||
           time.isBefore(issuedAt) ||
-          !time.isBefore(expiresAt)) {
+          !allowExpiredHealthy && !time.isBefore(expiresAt)) {
         return null;
       }
       return VerifiedManifest._(manifest);

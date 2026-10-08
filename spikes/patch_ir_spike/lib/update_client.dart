@@ -28,6 +28,16 @@ class UpdateClient {
   final timeout = const Duration(seconds: 15);
 
   Future<Uint8List> _get(Uri uri, int limit) async {
+    try {
+      return await _getOnce(uri, limit);
+    } on Object {
+      // Retry whole bounded files; never append unverified partial bytes.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      return _getOnce(uri, limit);
+    }
+  }
+
+  Future<Uint8List> _getOnce(Uri uri, int limit) async {
     final client = http.Client();
     try {
       return await (() async {
@@ -51,20 +61,35 @@ class UpdateClient {
     }
   }
 
-  /// ponytail: telemetry is best effort; add a durable outbox before production.
-  /// It carries no device/user identifiers and never
-  /// determines activation. A collector must treat client reports as untrusted.
+  /// Persist before sending; retry on the next post-health check/startup.
+  /// Event IDs deduplicate retries, not users. Telemetry never controls activation.
   Future<bool> report(String outcome, String? patchId) async {
+    final id = loader.store.enqueueReport(
+      loader.verifier.baselineId,
+      patchId,
+      outcome,
+    );
+    if (id == null) return false;
+    return (await flushReports()).contains(id);
+  }
+
+  Future<Set<String>> flushReports() async {
+    final delivered = <String>{};
+    for (final event in loader.store.pendingReports()) {
+      if (!await _sendReport(event)) break;
+      if (!loader.store.acknowledgeReport(event['eventId'] as String)) break;
+      delivered.add(event['eventId'] as String);
+    }
+    return delivered;
+  }
+
+  Future<bool> _sendReport(Map<String, dynamic> event) async {
     final client = http.Client();
     try {
       final request = http.Request('POST', base.resolve('/v1/reports'))
         ..followRedirects = false
         ..headers['content-type'] = 'application/json'
-        ..body = jsonEncode({
-          'baselineId': loader.verifier.baselineId,
-          'patchId': patchId,
-          'outcome': outcome,
-        });
+        ..body = jsonEncode(event);
       final response = await client.send(request).timeout(timeout);
       return response.statusCode == 202;
     } on Object {
@@ -77,6 +102,28 @@ class UpdateClient {
   Future<String> checkAndDownload({String? runningPatchId}) async {
     String? candidate;
     try {
+      await flushReports();
+      final withdrawals = jsonDecode(
+        utf8.decode(
+          await _get(
+            base
+                .resolve('/v1/withdrawals')
+                .replace(
+                  queryParameters: {'baselineId': loader.verifier.baselineId},
+                ),
+            128 * 1024,
+          ),
+        ),
+      );
+      if (withdrawals is! List || withdrawals.length > 64)
+        throw const FormatException('withdrawal feed');
+      for (final encoded in withdrawals) {
+        if (encoded is! String ||
+            !loader.withdrawSigned(base64.decode(encoded))) {
+          await report('rejected', null);
+          return 'rejected';
+        }
+      }
       final envelope = await _get(
         base
             .resolve('/v1/check')
@@ -86,11 +133,17 @@ class UpdateClient {
         maxManifestBytes,
       );
       if (utf8.decode(envelope) == 'null') return 'no_update';
-      final manifest = loader.verifier.verify(envelope);
-      if (manifest == null || manifest.rolloutPercent != 100) {
+      final manifest = loader.verifier.verify(envelope, allowRevocation: true);
+      if (manifest == null) {
         await report('rejected', null);
         return 'rejected';
       }
+      if (manifest.revoked) {
+        if (!loader.withdrawSigned(envelope)) return 'rejected';
+        await report('withdrawn', manifest.patchId);
+        return 'withdrawn';
+      }
+      if (!loader.eligible(manifest)) return 'not_selected';
       candidate = manifest.patchId;
       if (candidate == runningPatchId) return 'current';
       // Artifact location is derived from authenticated content, not a remote URL.

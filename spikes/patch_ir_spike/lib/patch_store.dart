@@ -17,7 +17,12 @@ final class PatchBootAttempt {
 }
 
 class PatchStore {
-  PatchStore(this.root, {this.verifyManifest, this.nativeIo}) {
+  PatchStore(
+    this.root, {
+    this.verifyManifest,
+    this.verifyHealthyManifest,
+    this.nativeIo,
+  }) {
     if (nativeIo != null &&
         nativeIo!.root.absolute.path != root.absolute.path) {
       throw ArgumentError('native store root does not match');
@@ -33,8 +38,11 @@ class PatchStore {
   final NativeStoreIo? nativeIo;
   final bool Function(String patchId, Uint8List envelope, Uint8List artifact)?
   verifyManifest;
+  final bool Function(String patchId, Uint8List envelope, Uint8List artifact)?
+  verifyHealthyManifest;
   final _withdrawn = <String>{};
   PatchBootAttempt? _ownedBoot;
+  String? previousIncompleteBoot;
 
   static bool _isPatchId(Object? value) =>
       value is String &&
@@ -68,6 +76,7 @@ class PatchStore {
   String beginBoot() => beginBootAttempt()?.patchId ?? bundled;
   PatchBootAttempt? beginBootAttempt() {
     _ownedBoot = null;
+    previousIncompleteBoot = null;
     return _transaction(null, _beginBootAttempt);
   }
 
@@ -99,6 +108,109 @@ class PatchStore {
     _ownedBoot = null;
     nativeIo?.close();
   }
+
+  // This random salt never leaves the device. Larger signed percentages select
+  // a superset of installations for the same baseline/patch pair.
+  int? rolloutBucket(String baselineId, String patchId) =>
+      _transaction(null, () {
+        final state = _deliveryState();
+        _saveDelivery(state);
+        final bytes = sha256
+            .convert(utf8.encode('${state['salt']}:$baselineId:$patchId'))
+            .bytes;
+        return ((bytes[0] << 8) | bytes[1]) % 100;
+      });
+
+  String? enqueueReport(
+    String baselineId,
+    String? patchId,
+    String outcome,
+  ) => _transaction(null, () {
+    if (!_isDigest(baselineId) ||
+        patchId != null && !_isPatchId(patchId) ||
+        !{
+          'baseline_healthy',
+          'patch_healthy',
+          'startup_failed',
+          'downloaded',
+          'rejected',
+          'download_failed',
+          'withdrawn',
+        }.contains(outcome))
+      return null;
+    final state = _deliveryState();
+    final events = state['events'] as List;
+    // Bounded disk use: a full queue rejects new telemetry, never patch health.
+    if (events.length >= 128) return null;
+    final id = _randomId();
+    events.add({
+      'eventId': id,
+      'baselineId': baselineId,
+      'patchId': patchId,
+      'outcome': outcome,
+    });
+    _saveDelivery(state);
+    return id;
+  });
+
+  List<Map<String, dynamic>> pendingReports() => _transaction(
+    <Map<String, dynamic>>[],
+    () => (jsonDecode(jsonEncode(_deliveryState()['events'])) as List)
+        .cast<Map<String, dynamic>>(),
+  );
+
+  bool acknowledgeReport(String eventId) => _transaction(false, () {
+    final state = _deliveryState();
+    (state['events'] as List).removeWhere(
+      (event) => event['eventId'] == eventId,
+    );
+    _saveDelivery(state);
+    return true;
+  });
+
+  String _randomId() {
+    final random = Random.secure();
+    return List.generate(
+      16,
+      (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ).join();
+  }
+
+  Map<String, dynamic> _deliveryState() {
+    if (nativeIo == null) _checkDirectory(root);
+    final bytes = _readOptional(
+      File('${root.path}/delivery.json'),
+      maxStateBytes,
+    );
+    if (bytes == null) return {'salt': _randomId(), 'events': <dynamic>[]};
+    final state = jsonDecode(utf8.decode(bytes));
+    if (state is! Map<String, dynamic> ||
+        state.length != 2 ||
+        state['salt'] is! String ||
+        !RegExp(r'^[a-f0-9]{32}$').hasMatch(state['salt']) ||
+        state['events'] is! List ||
+        (state['events'] as List).length > 128) {
+      throw const FormatException('invalid delivery state');
+    }
+    for (final event in state['events'] as List) {
+      if (event is! Map ||
+          event.length != 4 ||
+          event['eventId'] is! String ||
+          !RegExp(r'^[a-f0-9]{32}$').hasMatch(event['eventId']) ||
+          !_isDigest(event['baselineId']) ||
+          event['outcome'] is! String ||
+          event['patchId'] != null && !_isPatchId(event['patchId'])) {
+        throw const FormatException('invalid delivery event');
+      }
+    }
+    return state;
+  }
+
+  void _saveDelivery(Map<String, dynamic> state) => _replace(
+    File('${root.path}/delivery.json'),
+    utf8.encode(jsonEncode(state)),
+    maxStateBytes,
+  );
 
   bool _install(
     String patchId,
@@ -160,6 +272,7 @@ class PatchStore {
     try {
       final state = _read();
       final pending = state['pending'] as String?;
+      previousIncompleteBoot = pending;
       if (pending != null) {
         final failures = (state['failures'] as int) + 1;
         state['failures'] = failures;
@@ -322,7 +435,9 @@ class PatchStore {
       final bytes = _readOptional(file, maxArtifactBytes);
       if (bytes == null) return null;
       if (sha256.convert(bytes).toString() != expected) return null;
-      final verify = verifyManifest;
+      final verify = state['lastKnownGood'] == patchId
+          ? verifyHealthyManifest ?? verifyManifest
+          : verifyManifest;
       if (verify != null) {
         final envelope = _readOptional(_manifest(patchId), maxManifestBytes);
         if (envelope == null || !verify(patchId, envelope, bytes)) {

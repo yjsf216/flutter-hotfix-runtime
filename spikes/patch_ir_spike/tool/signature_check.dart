@@ -20,6 +20,12 @@ void main(List<String> args) {
     if (args.length >= 5) manifest['baselineId'] = args[4];
     if (args.length == 6) manifest['patchId'] = args[5];
     File(args[3]).writeAsBytesSync(_sign(directory, manifest));
+  } else if (args.length == 4 && args[0] == 'sign-json') {
+    final manifest =
+        jsonDecode(File(args[2]).readAsStringSync()) as Map<String, Object?>;
+    File(
+      args[3],
+    ).writeAsBytesSync(_sign(Directory(args[1]), manifest), flush: true);
   } else if (args.isEmpty) {
     _selfCheck();
   } else {
@@ -81,31 +87,45 @@ Map<String, Object?> _manifest(Uint8List artifact, DateTime now) => {
   'artifactSha256': sha256.convert(artifact).toString(),
   'artifactSize': artifact.length,
   'issuedAt': _timestamp(now.subtract(const Duration(minutes: 1))),
-  'expiresAt': _timestamp(now.add(const Duration(days: 1))),
+  'expiresAt': _timestamp(now.add(manifestLifetime())),
   'revoked': false,
   'rolloutPercent': 100,
 };
+
+Duration manifestLifetime() {
+  final seconds = int.parse(
+    Platform.environment['HOTFIX_MANIFEST_TTL_SECONDS'] ?? '86400',
+  );
+  if (seconds < 1 || seconds > 31536000)
+    throw ArgumentError('manifest TTL out of range');
+  return Duration(seconds: seconds);
+}
 
 String _timestamp(DateTime value) =>
     '${value.toUtc().toIso8601String().split('.').first}Z';
 
 Uint8List _sign(Directory directory, Map<String, Object?> manifest) {
-  final unsigned = File('${directory.path}/unsigned.json')
-    ..writeAsBytesSync(canonicalManifestBytes(manifest));
-  final signature = File('${directory.path}/manifest.sig');
-  _openssl([
-    'dgst',
-    '-sha256',
-    '-sign',
-    '${directory.path}/private.pem',
-    '-out',
-    signature.path,
-    unsigned.path,
-  ]);
-  return canonicalManifestBytes({
-    'manifest': manifest,
-    'signature': base64.encode(signature.readAsBytesSync()),
-  });
+  final temporary = Directory.systemTemp.createTempSync('hotfix-sign-');
+  try {
+    final unsigned = File('${temporary.path}/unsigned.json')
+      ..writeAsBytesSync(canonicalManifestBytes(manifest));
+    final signature = File('${temporary.path}/manifest.sig');
+    _openssl([
+      'dgst',
+      '-sha256',
+      '-sign',
+      '${directory.path}/private.pem',
+      '-out',
+      signature.path,
+      unsigned.path,
+    ]);
+    return canonicalManifestBytes({
+      'manifest': manifest,
+      'signature': base64.encode(signature.readAsBytesSync()),
+    });
+  } finally {
+    temporary.deleteSync(recursive: true);
+  }
 }
 
 void _selfCheck() {

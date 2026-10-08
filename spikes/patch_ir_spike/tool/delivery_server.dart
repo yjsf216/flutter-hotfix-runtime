@@ -26,11 +26,31 @@ class DeliveryServer {
       throw ArgumentError('strong publish token and trust anchors required');
     }
     root.createSync(recursive: true);
+    final reports = _file('reports.jsonl');
+    if (reports.existsSync()) {
+      if (reports.lengthSync() > 11 * 1024 * 1024)
+        throw StateError('report log exceeds limit');
+      var bytes = reports.readAsBytesSync();
+      if (bytes.isNotEmpty && bytes.last != 10) {
+        // A crash during append leaves an unacknowledged tail; the client retries.
+        bytes = bytes.sublist(0, bytes.lastIndexOf(10) + 1);
+        _atomic('reports.jsonl', bytes);
+        stderr.writeln('Recovered incomplete final report record');
+      }
+      for (final line in const LineSplitter().convert(utf8.decode(bytes))) {
+        final record = jsonDecode(line) as Map<String, dynamic>;
+        final eventId = record['eventId'];
+        if (eventId is String) {
+          _reports[eventId] = Map.of(record)..remove('receivedAt');
+        }
+      }
+    }
   }
   final Directory root;
   final String publishToken;
   final Map<String, Uint8List> publicKeys;
   HttpServer? server;
+  final _reports = <String, Map<String, dynamic>>{};
   File _file(String name) => File('${root.path}/$name');
 
   void _atomic(String name, List<int> bytes) {
@@ -64,6 +84,48 @@ class DeliveryServer {
     final path = req.uri.path;
     req.response.headers.contentType = ContentType.json;
     req.response.headers.set('cache-control', 'no-store');
+    if (req.method == 'POST' && path == '/v1/pause') {
+      if (req.headers.value('authorization') != 'Bearer $publishToken') {
+        req.response.statusCode = 401;
+        return;
+      }
+      final body = jsonDecode(utf8.decode(await readBody(req, 4096)));
+      if (body is! Map ||
+          body.length != 2 ||
+          body['baselineId'] is! String ||
+          !_digest.hasMatch(body['baselineId']) ||
+          body['paused'] is! bool) {
+        throw const FormatException('pause requires baselineId and paused');
+      }
+      _atomic('${body['baselineId']}.paused', utf8.encode('${body['paused']}'));
+      req.response.statusCode = 204;
+      return;
+    }
+    if (req.method == 'GET' && path == '/v1/withdrawals') {
+      final baseline = req.uri.queryParameters['baselineId'] ?? '';
+      if (!_digest.hasMatch(baseline)) throw const FormatException('baseline');
+      final file = _file('$baseline.withdrawals');
+      req.response.add(
+        file.existsSync() ? file.readAsBytesSync() : utf8.encode('[]'),
+      );
+      return;
+    }
+    if (req.method == 'GET' && path == '/v1/stats') {
+      if (req.headers.value('authorization') != 'Bearer $publishToken') {
+        req.response.statusCode = 401;
+        return;
+      }
+      final counts = <String, int>{};
+      for (final event in _reports.values) {
+        final key =
+            '${event['baselineId']}/${event['patchId'] ?? 'bundled'}/${event['outcome']}';
+        counts[key] = (counts[key] ?? 0) + 1;
+      }
+      req.response.write(
+        jsonEncode({'eventCounts': counts, 'uniqueUsers': null}),
+      );
+      return;
+    }
     if (req.method == 'POST' && path == '/v1/releases') {
       if (req.headers.value('authorization') != 'Bearer $publishToken') {
         req.response.statusCode = 401;
@@ -92,10 +154,8 @@ class DeliveryServer {
         releaseIdentity: Map<String, Object?>.from(manifest['identity'] as Map),
         publicKeys: publicKeys,
       );
-      final verified = verifier.verify(envelope);
-      if (verified == null ||
-          verified.rolloutPercent != 100 ||
-          !verified.matchesArtifact(bytes)) {
+      final verified = verifier.verify(envelope, allowRevocation: true);
+      if (verified == null || !verified.matchesArtifact(bytes)) {
         req.response.statusCode = 422;
         return;
       }
@@ -105,8 +165,43 @@ class DeliveryServer {
       if (_file(record).existsSync() &&
           sha256.convert(_file(record).readAsBytesSync()).toString() !=
               sha256.convert(envelope).toString()) {
-        req.response.statusCode = 409;
-        return;
+        final previous =
+            (jsonDecode(_file(record).readAsStringSync()) as Map)['manifest']
+                as Map;
+        Map<String, dynamic> payload(Map source) =>
+            Map<String, dynamic>.from(source)
+              ..remove('rolloutPercent')
+              ..remove('revoked')
+              ..remove('issuedAt')
+              ..remove('expiresAt');
+        if (utf8.decode(canonicalManifestBytes(payload(previous))) !=
+                utf8.decode(canonicalManifestBytes(payload(manifest))) ||
+            previous['revoked'] == true && manifest['revoked'] != true ||
+            !DateTime.parse(
+              manifest['issuedAt'] as String,
+            ).isAfter(DateTime.parse(previous['issuedAt'] as String))) {
+          req.response.statusCode = 409;
+          return;
+        }
+      }
+      if (verified.revoked) {
+        final file = _file('$baseline.withdrawals');
+        final controls = file.existsSync()
+            ? (jsonDecode(file.readAsStringSync()) as List).cast<String>()
+            : <String>[];
+        controls.removeWhere(
+          (encoded) =>
+              (jsonDecode(utf8.decode(base64.decode(encoded)))
+                  as Map)['manifest']['patchId'] ==
+              verified.patchId,
+        );
+        controls.add(base64.encode(envelope));
+        final encoded = utf8.encode(jsonEncode(controls));
+        if (controls.length > 64 || encoded.length > 128 * 1024) {
+          req.response.statusCode = 507;
+          return;
+        }
+        _atomic('$baseline.withdrawals', encoded);
       }
       _atomic('${verified.artifactSha256}.blob', bytes);
       _atomic(record, envelope);
@@ -119,8 +214,12 @@ class DeliveryServer {
       final baseline = req.uri.queryParameters['baselineId'] ?? '';
       if (!_digest.hasMatch(baseline)) throw const FormatException('baseline');
       final file = _file('$baseline.latest');
+      final paused = _file('$baseline.paused');
       req.response.add(
-        file.existsSync() ? file.readAsBytesSync() : utf8.encode('null'),
+        file.existsSync() &&
+                !(paused.existsSync() && paused.readAsStringSync() == 'true')
+            ? file.readAsBytesSync()
+            : utf8.encode('null'),
       );
     } else if (req.method == 'GET' && path.startsWith('/v1/blobs/')) {
       final digest = path.substring('/v1/blobs/'.length);
@@ -141,9 +240,18 @@ class DeliveryServer {
         'downloaded',
         'rejected',
         'download_failed',
+        'withdrawn',
       };
       if (report is! Map ||
-          report.length != 3 ||
+          (report.length != 3 && report.length != 4) ||
+          !report.keys.toSet().containsAll({
+            'baselineId',
+            'patchId',
+            'outcome',
+          }) ||
+          report.length == 4 &&
+              (report['eventId'] is! String ||
+                  !RegExp(r'^[a-f0-9]{32}$').hasMatch(report['eventId'])) ||
           report['baselineId'] is! String ||
           !_digest.hasMatch(report['baselineId']) ||
           !outcomes.contains(report['outcome']) ||
@@ -153,6 +261,17 @@ class DeliveryServer {
         throw const FormatException('report');
       }
       final file = _file('reports.jsonl');
+      final eventId = report['eventId'];
+      if (eventId is String && _reports.containsKey(eventId)) {
+        req.response.statusCode =
+            utf8.decode(canonicalManifestBytes(_reports[eventId])) ==
+                utf8.decode(
+                  canonicalManifestBytes(Map<String, dynamic>.from(report)),
+                )
+            ? 202
+            : 409;
+        return;
+      }
       // Untrusted observations, never used as an activation or rollback command.
       if (file.existsSync() && file.lengthSync() > 10 * 1024 * 1024) {
         req.response.statusCode = 507;
@@ -163,6 +282,8 @@ class DeliveryServer {
         mode: FileMode.append,
         flush: true,
       );
+      if (eventId is String)
+        _reports[eventId] = Map<String, dynamic>.from(report);
       req.response.statusCode = 202;
     } else {
       req.response.statusCode = 404;
