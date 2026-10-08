@@ -1,6 +1,14 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+case "${1:-}" in
+  --help)
+    printf '%s\n' 'hotfix release-android CONFIG OUTPUT [--resume-packaging]' 'hotfix patch-android ARCHIVE REF OUTPUT KEY_DIR PATCH_ID'
+    ;;
+  release-android|patch-android)
+    exec python3 "$root/tool/android_release.py" "$@"
+    ;;
+esac
 sdk=${DART_SDK_SOURCE:-"$root/work/upstream/dart-sdk"}
 export DART_SDK_SOURCE="$sdk"
 dart=${DART_BIN:-dart}
