@@ -15,6 +15,7 @@ import 'package:kernel/clone.dart';
 import 'package:kernel/core_types.dart';
 import 'package:kernel/kernel.dart';
 import 'package:kernel/src/replacement_visitor.dart';
+import 'package:kernel/src/constant_replacer.dart';
 import 'package:kernel/type_algebra.dart';
 import 'package:package_config/package_config.dart';
 import 'package:vm/kernel_front_end.dart';
@@ -207,6 +208,17 @@ Future<void> compileBaseline({
       lib.accept(references);
     }
     retainedLibraries = {...retainedLibraries, ...references.uris};
+    // A Flutter patch can compose another public Widget from the framework
+    // already compiled into this release. Retain only those frozen libraries;
+    // new packages and SDK imports still require an explicit new baseline.
+    if (targetName == 'flutter') {
+      retainedLibraries = {
+        ...retainedLibraries,
+        for (final lib in component.libraries)
+          if (lib.importUri.toString().startsWith('package:flutter/'))
+            lib.importUri,
+      };
+    }
   }
   for (final lib in baselines) {
     _checkPatchable(lib);
@@ -892,7 +904,7 @@ class _CandidateFileSystem implements front_end_fs.FileSystem {
 
 /// Preserve callable API libraries already referenced by the business Kernel.
 /// New dependencies remain outside the frozen interface and require a new base.
-class _ReferenceLibraries extends RecursiveVisitor {
+class _ReferenceLibraries extends _ConstantReferences {
   final uris = <Uri>{};
   @override
   void defaultMemberReference(Member node) =>
@@ -900,6 +912,24 @@ class _ReferenceLibraries extends RecursiveVisitor {
   @override
   void visitClassReference(Class node) =>
       uris.add(node.enclosingLibrary.importUri);
+
+  @override
+  void visitSymbolConstantReference(SymbolConstant node) {
+    final library = node.libraryReference?.asLibrary;
+    if (library != null) uris.add(library.importUri);
+  }
+}
+
+/// Kernel constants reference their children instead of visiting them as nodes.
+/// Follow the whole shared constant graph once: a const MaterialColor can hide
+/// Color/ColorSwatch types and fields several levels below the app expression.
+class _ConstantReferences extends RecursiveVisitor {
+  final Set<Constant> _constants = Set.identity();
+
+  @override
+  void defaultConstantReference(Constant node) {
+    if (_constants.add(node)) node.visitChildren(this);
+  }
 }
 
 FunctionType _patchAbi(Procedure procedure, CoreTypes core) {
@@ -1005,6 +1035,11 @@ class _PatchCloner extends CloneVisitorNotMembers {
   final Map<Procedure, Procedure> implementations;
   final VariableDeclaration? receiver;
   final _Types types;
+  late final _PatchConstants constants = _PatchConstants(this);
+
+  @override
+  Constant visitConstant(Constant node) =>
+      constants.visitConstant(node) ?? node;
 
   Member _member(Member member) {
     final baselineLibrary = libraries[member.enclosingLibrary];
@@ -1082,7 +1117,9 @@ class _PatchCloner extends CloneVisitorNotMembers {
 
   @override
   TreeNode visitInstanceTearOff(InstanceTearOff node) => InstanceTearOff(
-    node.kind, clone(node.receiver), _name(node.name),
+    node.kind,
+    clone(node.receiver),
+    _name(node.name),
     interfaceTarget: _member(node.interfaceTarget) as Procedure,
     resultType: visitType(node.resultType),
   );
@@ -1117,6 +1154,45 @@ class _PatchCloner extends CloneVisitorNotMembers {
       )..flags = node.flags;
 }
 
+/// Bind declarations inside constants to the same frozen API as expressions.
+/// Kernel's replacer already handles nested lists/maps/records and type literals.
+class _PatchConstants extends ConstantReplacer {
+  _PatchConstants(this.cloner);
+  final _PatchCloner cloner;
+
+  @override
+  DartType? visitDartType(DartType type) {
+    final mapped = cloner.visitType(type);
+    return mapped == type ? null : mapped;
+  }
+
+  @override
+  Constant? visitInstanceConstant(InstanceConstant node) => InstanceConstant(
+    (cloner.types.classes[node.classNode] ?? node.classNode).reference,
+    node.typeArguments.map(cloner.visitType).toList(),
+    {
+      for (final entry in node.fieldValues.entries)
+        cloner._member(entry.key.asField).reference:
+            visitConstant(entry.value) ?? entry.value,
+    },
+  );
+
+  @override
+  Constant? visitStaticTearOffConstant(StaticTearOffConstant node) =>
+      StaticTearOffConstant(cloner._member(node.target) as Procedure);
+
+  @override
+  Constant? visitConstructorTearOffConstant(ConstructorTearOffConstant node) =>
+      ConstructorTearOffConstant(cloner._member(node.target));
+
+  @override
+  Constant? visitRedirectingFactoryTearOffConstant(
+    RedirectingFactoryTearOffConstant node,
+  ) => RedirectingFactoryTearOffConstant(
+    cloner._member(node.target) as Procedure,
+  );
+}
+
 class _Types extends ReplacementVisitor {
   _Types(this.classes);
   final Map<Class, Class> classes;
@@ -1139,7 +1215,7 @@ class _Types extends ReplacementVisitor {
 }
 
 /// Any unsupported rebinding fails compilation, before bytecode reaches a VM.
-class _ModuleBoundary extends RecursiveVisitor {
+class _ModuleBoundary extends _ConstantReferences {
   _ModuleBoundary(this.allowed);
   final Set<Library> allowed;
   void _check(Library library) {
@@ -1189,6 +1265,4 @@ class _ModuleBoundary extends RecursiveVisitor {
       throw const FormatException(
         'super setter requires lexical class lowering',
       );
-  @override
-  void defaultConstantReference(Constant node) => node.visitChildren(this);
 }
