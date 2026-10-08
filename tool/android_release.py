@@ -84,12 +84,44 @@ def verify_libs(apk, expected):
                     f'APK does not contain frozen {name}')
 
 
+def verify_packaged_content(original, packaged):
+    """Only the frozen AOT/Engine, signatures and removed non-arm64 ABIs may change."""
+    def contents(path):
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            require(len(names) == len(set(names)), 'Duplicate APK entries')
+            result = {}
+            for entry in archive.infolist():
+                name = entry.filename
+                signature = name == 'META-INF/MANIFEST.MF' or (
+                    name.startswith('META-INF/') and name.rsplit('.', 1)[-1] in {'SF', 'RSA', 'DSA', 'EC'})
+                other_abi = name.startswith('lib/') and not name.startswith('lib/arm64-v8a/')
+                replaced = name in {'lib/arm64-v8a/libapp.so', 'lib/arm64-v8a/libflutter.so'}
+                if entry.is_dir() or other_abi or replaced or signature:
+                    continue
+                sha = hashlib.sha256()
+                with archive.open(entry) as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                        sha.update(chunk)
+                result[name] = sha.hexdigest()
+            require(any(re.fullmatch(r'classes\d*\.dex', name) for name in result), 'Native APK has no DEX')
+            return result
+    require(contents(original) == contents(packaged),
+            'Packaged DEX/resources/assets/native plugins differ from the verified native APK')
+
+
 def init_script():
     # Properties are passed as arguments, never interpolated into Groovy source.
     return '''gradle.projectsEvaluated {
     def app = gradle.rootProject.findProject(':app')
     if (app == null) return
     def variant = app.property('hotfixVariant')
+    // The first phase already builds this commit's complete native APK. Reuse
+    // its Dart assets and minified DEX; the caller verifies all non-lib bytes.
+    app.tasks.matching {
+        it.name.startsWith('compileFlutterBuild') ||
+        it.name == 'minify' + variant.capitalize() + 'WithR8'
+    }.configureEach { onlyIf { false } }
     app.tasks.named('strip' + variant.capitalize() + 'DebugSymbols').configure {
         outputs.upToDateWhen { false }
         doLast {
@@ -186,6 +218,7 @@ def release(config_path, output, resume=False):
             apk = output / 'app.apk'
             shutil.copyfile(packaged, apk)
             verify_libs(apk, libs)
+            verify_packaged_content(original, apk)
             require(apk_info(apk, build_tools) == original_info, 'Packaged identity/signature changed')
             require(head(project) == commit, 'Git changed during packaging')
             # Success marker is written last; an interrupted archive cannot be patched.

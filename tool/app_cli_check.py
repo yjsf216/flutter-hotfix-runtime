@@ -12,6 +12,27 @@ import app_cli as app
 
 
 class AppCliCheck(unittest.TestCase):
+    def test_tool_stamp_ignores_checks_but_freezes_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / 'spikes/patch_ir_spike/lib/runtime.dart'
+            runtime.parent.mkdir(parents=True)
+            runtime.write_text('baseline runtime')
+            checks = root / 'spikes/patch_ir_spike/tool/new_check.dart'
+            checks.parent.mkdir(parents=True)
+            checks.write_text('test v1')
+            signer = checks.parent / 'signature_check.dart'
+            signer.write_text('signer v1')
+            with patch.object(app, 'ROOT', root), patch.object(app, 'digest', side_effect=lambda p: p.read_text() if p.exists() else ''):
+                original = app.tool_stamp()
+                checks.write_text('test v2')
+                self.assertEqual(app.tool_stamp(), original)
+                signer.write_text('signer v2')
+                self.assertNotEqual(app.tool_stamp(), original)
+                signer.write_text('signer v1')
+                runtime.write_text('updated runtime')
+                self.assertNotEqual(app.tool_stamp(), original)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()

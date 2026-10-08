@@ -142,12 +142,15 @@ def validate_tools(env):
 
 
 def tool_stamp():
-    # Conservative: even tool-test changes require deliberately retaining the old
-    # tool checkout. Never silently build a patch with different runtime sources.
+    # Freeze executable tooling/runtime sources. Regression checks do not enter
+    # the release or patch, so editing a test must not invalidate an App baseline.
     files = [ROOT / 'tool/hotfix', ROOT / 'native/CMakeLists.txt', ROOT / 'spikes/patch_ir_spike/pubspec.yaml']
-    files += list((ROOT / 'tool').glob('*.py')) + list((ROOT / 'tool').glob('*.dart'))
+    files += [p for p in (ROOT / 'tool').glob('*.py') if not p.name.endswith('_check.py')]
+    files += [p for p in (ROOT / 'tool').glob('*.dart') if not p.name.endswith('_check.dart')]
     files += list((ROOT / 'spikes/patch_ir_spike/lib').rglob('*.dart'))
-    files += list((ROOT / 'spikes/patch_ir_spike/tool').glob('*.dart'))
+    # signature_check.dart is the production signer despite its historical name.
+    files += [p for p in (ROOT / 'spikes/patch_ir_spike/tool').glob('*.dart')
+              if not p.name.endswith('_check.dart') or p.name == 'signature_check.dart']
     files += list((ROOT / 'native').glob('*.c')) + list((ROOT / 'native').glob('*.h'))
     return hashlib.sha256(json.dumps({str(p.relative_to(ROOT)): digest(p) for p in sorted(files)}, sort_keys=True).encode()).hexdigest()
 

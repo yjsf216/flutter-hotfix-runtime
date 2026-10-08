@@ -24,6 +24,26 @@ with tempfile.TemporaryDirectory() as directory:
         archive.writestr('lib/arm64-v8a/libapp.so', b'aot')
         archive.writestr('lib/arm64-v8a/libpatch_store_io.so', b'native')
     build.verify_libs(apk, expected)
+    original = root / 'native.apk'
+    with zipfile.ZipFile(original, 'w') as archive:
+        archive.writestr('classes.dex', b'frozen classes')
+        archive.writestr('resources.arsc', b'frozen resources')
+        archive.writestr('assets/flutter_assets/test.txt', b'frozen asset')
+        archive.writestr('lib/arm64-v8a/libapp.so', b'stock aot')
+        archive.writestr('lib/arm64-v8a/libpatch_store_io.so', b'native')
+        archive.writestr('META-INF/CERT.SF', b'old signature')
+    with zipfile.ZipFile(apk, 'a') as archive:
+        archive.writestr('classes.dex', b'frozen classes')
+        archive.writestr('resources.arsc', b'frozen resources')
+        archive.writestr('assets/flutter_assets/test.txt', b'frozen asset')
+        archive.writestr('META-INF/CERT.SF', b'new signature')
+    build.verify_packaged_content(original, apk)
+    altered = root / 'altered.apk'
+    with zipfile.ZipFile(altered, 'w') as archive:
+        archive.writestr('classes.dex', b'wrong classes')
+        archive.writestr('resources.arsc', b'frozen resources')
+        archive.writestr('assets/flutter_assets/test.txt', b'frozen asset')
+    rejects(lambda: build.verify_packaged_content(original, altered))
     rejects(lambda: build.verify_libs(apk, {'libapp.so': 'wrong'}))
     # A missing completion marker must fail before invoking the compiler.
     with patch.object(build, 'cli', side_effect=AssertionError('compiler invoked')):
