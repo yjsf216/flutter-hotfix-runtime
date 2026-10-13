@@ -104,6 +104,30 @@ class ConsoleCheck(unittest.TestCase):
             self.console.prepare_dependencies({'id': 'd' * 24})
         self.assertEqual(target.read_text(), 'commit owned dependencies')
 
+    def test_patch_restores_selected_baseline_properties_and_rejects_tampering(self):
+        self.console.prepare({'id': 'a' * 24})
+        props = self.console.workspace / 'android/local.properties'
+        props.parent.mkdir(parents=True)
+        records = []
+        for number in (1, 2):
+            props.write_text(f'flutter.buildMode=release\nflutter.versionCode={number}\n')
+            archive = self.console.root / ('base-' + str(number))
+            server.app.save(archive / 'baseline/project.json', {'sources': {'android/local.properties': server.app.digest(props)}})
+            frozen = self.console.freeze_local_properties(archive, {'id': str(number) * 24})
+            records.append({'path': str(archive), 'localProperties': frozen})
+        self.console.restore_local_properties(records[0])
+        self.assertIn('flutter.versionCode=1', props.read_text())
+        original = self.project / 'android/local.properties'
+        original.parent.mkdir(parents=True)
+        original.write_text('flutter.buildMode=debug\n')
+        self.console.prepare({'id': 'b' * 24, 'action': 'patch'})
+        self.assertIn('flutter.buildMode=release', props.read_text())
+        self.console.restore_local_properties(records[1])
+        self.assertIn('flutter.versionCode=2', props.read_text())
+        Path(records[0]['localProperties']['path']).write_text('tampered')
+        with self.assertRaisesRegex(ValueError, '已被修改'):
+            self.console.restore_local_properties(records[0])
+
     def test_android_dependency_resolution_preserves_only_desktop_registrants(self):
         self.console.prepare({'id': 'e' * 24})
         desktop = self.console.workspace / 'macos/Flutter/GeneratedPluginRegistrant.swift'

@@ -100,6 +100,8 @@ class Console:
         # Only known local Android configuration is copied. Keystores remain at
         # operator-configured paths; arbitrary ignored files are never copied.
         for relative in ('android/local.properties', 'android/key.properties'):
+            if task.get('action') == 'patch' and relative == 'android/local.properties':
+                continue
             source = self.project / relative
             if source.exists():
                 app.require(source.is_file() and not source.is_symlink(), 'Android 配置需要普通文件')
@@ -111,6 +113,36 @@ class Console:
                 destination.chmod(0o600)
         managed = {**self.profile, 'project': str(self.workspace)}
         app.save(self.workspace / '.hotfix/local.json', managed)
+
+    def freeze_local_properties(self, archive, task):
+        expected = app.read(archive / 'baseline/project.json')['sources'].get('android/local.properties')
+        if expected is None:
+            return None
+        source = self.workspace / 'android/local.properties'
+        app.require(source.is_file() and not source.is_symlink() and app.digest(source) == expected,
+                    '构建 local.properties 与冻结输入不一致')
+        destination = self.root / (task['id'] + '.inputs') / 'local.properties'
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+        destination.chmod(0o600)
+        return {'path': str(destination), 'sha256': expected}
+
+    def restore_local_properties(self, baseline):
+        expected = app.read(Path(baseline['path']) / 'baseline/project.json')['sources'].get('android/local.properties')
+        if expected is None:
+            return
+        saved = baseline.get('localProperties')
+        destination = self.workspace / 'android/local.properties'
+        app.require(not destination.is_symlink(), 'local.properties 不能是软链接')
+        if saved:
+            source = Path(saved['path'])
+            app.require(source.is_file() and not source.is_symlink() and saved['sha256'] == expected and
+                        app.digest(source) == expected, '冻结的 local.properties 已被修改')
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(source.read_bytes())
+        else:
+            app.require(destination.is_file() and app.digest(destination) == expected,
+                        '历史基线缺少匹配的 local.properties 归档；请使用原工具与构建副本或构建新基线')
 
     def execute(self, task, args, cwd=None, extra=None):
         env = {**os.environ, **self.profile['environment'], **(extra or {})}
@@ -242,6 +274,8 @@ class Console:
                 app.require(self.git('status', '--porcelain', '--untracked-files=all') == '',
                             '专用构建副本有未提交修改，拒绝覆盖；请检查后重试')
                 self.execute(task, ['git', '-C', self.workspace, 'checkout', '--detach', task['commit']])
+                if action == 'patch':
+                    self.restore_local_properties(self.item('baselines', task['baseline']))
                 self.prepare_dependencies(task)
                 if action == 'patch':
                     base = self.item('baselines', task['baseline'])
@@ -255,7 +289,8 @@ class Console:
                               'baselineId': receipt['baselineId'], 'release': receipt['release'],
                               'appId': receipt['appId'], 'commit': receipt['gitCommit'],
                               'apkSha256': receipt['apkSha256'],
-                              'origin': app.read(path / 'baseline/project.json')['updateOrigin']}
+                              'origin': app.read(path / 'baseline/project.json')['updateOrigin'],
+                              'localProperties': self.freeze_local_properties(path, task)}
                     collection = 'baselines'
                 else:
                     candidate = state['patch']
@@ -326,7 +361,7 @@ class Console:
             for item in data[collection]:
                 if collection == 'patches':
                     item['withdrawalStarted'] = bool(item.get('withdrawal'))
-                for key in ('path', 'baseline', 'withdrawal'):
+                for key in ('path', 'baseline', 'withdrawal', 'localProperties'):
                     item.pop(key, None)
         commits = app.run(['git', '-C', self.project, 'log', '--all', '-100', '--format=%H%x09%s'], capture=True)
         data['commits'] = [dict(zip(('sha', 'subject'), line.split('\t', 1))) for line in commits.splitlines()]

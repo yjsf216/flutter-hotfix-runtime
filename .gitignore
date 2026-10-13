@@ -3,6 +3,7 @@
 /work/
 .DS_Store
 **/.dart_tool/
+**/__pycache__/
 **/build/
 .env
 .env.*
