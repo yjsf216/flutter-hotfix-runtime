@@ -95,6 +95,35 @@ class AppCliCheck(unittest.TestCase):
             with self.assertRaises(ValueError):
                 app.local_http(origin)
 
+    def test_lan_requires_explicit_private_ipv4_and_exact_whitelist(self):
+        origin = 'http://192.168.111.53:18091'
+        with self.assertRaises(ValueError):
+            app.local_http(origin)
+        self.assertTrue(app.local_http(origin, True))
+        for host in ['8.8.8.8', '169.254.1.1', '100.64.0.1', '0.0.0.0', 'localhost', 'example.com', '[::1]']:
+            with self.assertRaises(ValueError):
+                app.local_http('http://' + host + ':18091', True)
+        for host in ['10.1.2.3', '172.16.1.2', '172.31.255.1']:
+            self.assertTrue(app.local_http('http://' + host + ':18091', True))
+        plan, config = app.integration_plan(self.root, self.info, origin, True)
+        xml = plan[self.root / 'android/app/src/hotfix/res/xml/hotfix_network_security.xml']
+        self.assertTrue(config['allowDevelopmentLan'])
+        self.assertIn('>192.168.111.53<', xml)
+        self.assertIn('includeSubdomains="false"', xml)
+        self.assertIn('base-config cleartextTrafficPermitted="false"', xml)
+
+    def test_lan_serve_binds_only_configured_interface(self):
+        self.put('.hotfix/local.json', json.dumps({'schemaVersion': 1, 'ready': True,
+                 'project': str(self.root), 'environment': {'HOTFIX_PUBLIC_KEY_FILE': '/test/public-key.txt'}}))
+        self.put('hotfix.android.json', json.dumps({'updateOrigin': 'http://192.168.111.53:18095',
+                 'allowDevelopmentLan': True, 'allowDevelopmentHttp': True}))
+        with patch.object(app, 'invoke') as invoke:
+            app.perform(self.root, 'serve')
+        extra = invoke.call_args.kwargs['extra']
+        self.assertEqual(extra['HOTFIX_BIND'], '192.168.111.53')
+        self.assertEqual(extra['HOTFIX_PORT'], '18095')
+        self.assertGreaterEqual(len(extra['HOTFIX_PUBLISH_TOKEN']), 24)
+
     def test_unignored_private_directory_refused_before_writes(self):
         self.put('.gitignore', '!/.hotfix/\n')
         args = argparse.Namespace(origin='http://127.0.0.1:18091', keys=str(self.root / '.hotfix/keys'), dry_run=False)

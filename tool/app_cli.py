@@ -3,6 +3,7 @@ import argparse
 import fcntl
 import getpass
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -89,14 +90,22 @@ def project_root():
     return project
 
 
-def local_http(origin):
+def local_http(origin, allow_lan=False):
     require(isinstance(origin, str) and origin == origin.strip() and not any(ord(c) < 32 for c in origin), '无效服务地址')
     url = urlsplit(origin)
     require(url.hostname and '@' not in url.netloc and
             url.path in ('', '/') and not url.query and not url.fragment,
             '更新地址必须是没有路径、认证信息或查询参数的 origin')
-    require(url.scheme == 'https' or url.scheme == 'http' and url.hostname == '127.0.0.1',
-            '正式地址必须 HTTPS；简化入口只允许 127.0.0.1 的测试 HTTP')
+    lan = False
+    if allow_lan is True:
+        try:
+            address = ipaddress.IPv4Address(url.hostname)
+            lan = any(address in ipaddress.IPv4Network(network) for network in
+                      ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
+        except ipaddress.AddressValueError:
+            pass
+    require(url.scheme == 'https' or url.scheme == 'http' and (url.hostname == '127.0.0.1' or lan),
+            '正式地址必须 HTTPS；局域网 HTTP 需显式 --dev-lan，且只能使用 RFC1918 私有 IPv4')
     _ = url.port  # Validate malformed ports before writing anything.
     return url.scheme == 'http'
 
@@ -160,7 +169,7 @@ def app_info(project, env):
                            ROOT / 'tool/app_info.dart', project / 'pubspec.yaml'], capture=True, env={**os.environ, **env}))
 
 
-def integration_plan(project, info, origin):
+def integration_plan(project, info, origin, allow_lan=False):
     """Only a recognizable plain FlutterActivity template is edited automatically."""
     config_file = project / 'hotfix.android.json'
     if config_file.exists():
@@ -168,7 +177,9 @@ def integration_plan(project, info, origin):
         require(config['platform'] == 'android' and (project / config['project']).resolve() == project,
                 '已有配置必须指向当前 Android App')
         require(not origin or config.get('updateOrigin') == origin, '不自动覆盖已有服务地址；请单独修改配置并构建新基线')
-        local_http(config.get('updateOrigin', ''))
+        require(not allow_lan or config.get('allowDevelopmentLan') is True,
+                '已有配置请先显式设置 allowDevelopmentLan=true，并修改测试网络白名单；不会自动覆盖')
+        local_http(config.get('updateOrigin', ''), config.get('allowDevelopmentLan') is True)
         require(isinstance(config.get('androidFlavor'), str) and re.fullmatch(r'[a-z][A-Za-z0-9]*', config['androidFlavor']),
                 '已有配置需要明确的 androidFlavor，请按手动教程补齐')
         require(isinstance(config.get('entry'), str) and bool(config['entry']), '已有配置缺少 entry')
@@ -176,7 +187,7 @@ def integration_plan(project, info, origin):
         require(bool(entry.parts) and entry.parts[0] == 'lib' and '..' not in entry.parts and (project / entry).is_file(), '已有定制入口不存在')
         return {}, config
     origin = origin or ask('补丁服务 origin（默认仅本机测试）', 'http://127.0.0.1:18091')
-    development = local_http(origin)
+    development = local_http(origin, allow_lan)
     gradles = [p for p in [project / 'android/app/build.gradle.kts', project / 'android/app/build.gradle'] if p.is_file()]
     activities = list((project / 'android/app/src/main/kotlin').rglob('MainActivity.kt'))
     require(len(gradles) == 1 and len(activities) == 1, '无法唯一识别 Gradle/MainActivity；请按 GETTING_STARTED.md 手动接入后重新 init')
@@ -228,7 +239,8 @@ android {{
         manifest_text = re.sub(r'(<manifest\b[^>]*>)', r'\1\n    <uses-permission android:name="android.permission.INTERNET" />', manifest_text, count=1)
     config = {'project': '.', 'entry': 'lib/main_hotfix.dart', 'patchScope': 'lib', 'platform': 'android',
               'appId': app_ids[0], 'androidFlavor': 'hotfix', 'dartDefines': {},
-              'updateOrigin': origin, 'allowDevelopmentHttp': development}
+              'updateOrigin': origin, 'allowDevelopmentHttp': development,
+              **({'allowDevelopmentLan': True} if allow_lan and development else {})}
     plan = {pubspec: spec, activity: re.sub(pattern, 'class MainActivity : FlutterActivity()' + ARGS_METHOD, activity_text),
             gradle: gradle_text + ('\napply(from = "hotfix.gradle")\n' if gradle.suffix == '.kts' else "\napply from: 'hotfix.gradle'\n"),
             manifest: manifest_text}
@@ -239,7 +251,8 @@ android {{
     <application android:networkSecurityConfig="@xml/hotfix_network_security" />
 </manifest>
 '''
-        new[project / 'android/app/src/hotfix/res/xml/hotfix_network_security.xml'] = NETWORK
+        new[project / 'android/app/src/hotfix/res/xml/hotfix_network_security.xml'] = NETWORK.replace(
+            '>127.0.0.1<', '>' + urlsplit(origin).hostname + '<')
     for path in new:
         require(not path.exists(), f'不覆盖已有文件: {path}')
     return {**plan, **new}, config
@@ -257,7 +270,7 @@ def initialize(project, args):
     env = tools_environment(args, previous)
     info = app_info(project, env)
     require(isinstance(info['version'], str) and re.fullmatch(r'[0-9A-Za-z.+_-]+', info['version']), 'pubspec.yaml 必须有明确的 version')
-    plan, config = integration_plan(project, info, args.origin)
+    plan, config = integration_plan(project, info, args.origin, getattr(args, 'dev_lan', False))
     key_default = previous.get('keys') or (str(Path(os.environ['HOTFIX_PUBLIC_KEY_FILE']).parent)
         if os.environ.get('HOTFIX_PUBLIC_KEY_FILE') else str(local / 'keys'))
     keys = Path(args.keys or ask('补丁密钥目录（不存在时生成测试密钥）', key_default)).expanduser().resolve()
@@ -267,7 +280,7 @@ def initialize(project, args):
         require(not path.is_symlink() and all(not p.is_symlink() for p in path.parents if p != project.parent),
                 f'不改写软链接路径: {path}')
     print('将复用已有接入配置' if not plan else '将生成/修改:\n' + '\n'.join(str(p.relative_to(project)) for p in plan))
-    print('模式：本机 HTTP 测试' if local_http(config['updateOrigin']) else '模式：HTTPS（不会自动部署服务器）')
+    print('模式：开发 HTTP 测试（非生产）' if local_http(config['updateOrigin'], config.get('allowDevelopmentLan') is True) else '模式：HTTPS（不会自动部署服务器）')
     if args.dry_run:
         print('预览结束，未写入文件、生成密钥或解析依赖。')
         return
@@ -388,7 +401,8 @@ def perform(project, action, yes=False):
         return
     if action == 'serve':
         config = read(project / 'hotfix.android.json')
-        require(local_http(config['updateOrigin']), 'serve 只启动本机 HTTP 测试服务；HTTPS 请按 delivery/README.md 部署')
+        require(local_http(config['updateOrigin'], config.get('allowDevelopmentLan') is True),
+                'serve 只启动显式开发 HTTP 测试服务；HTTPS 请按 delivery/README.md 部署')
         token_file = local / 'publish-token'
         require(not token_file.is_symlink(), '令牌文件不能是软链接')
         if not token_file.exists():
@@ -398,9 +412,10 @@ def perform(project, action, yes=False):
         token = token_file.read_text().strip()
         require(len(token) >= 24, '测试发布令牌无效')
         port = urlsplit(config['updateOrigin']).port or 80
-        print(f'启动本机测试服务 127.0.0.1:{port}；另开终端生成/发布补丁，Ctrl+C 停止。', flush=True)
+        host = urlsplit(config['updateOrigin']).hostname
+        print(f'启动开发测试服务 {host}:{port}；勿用于生产，Ctrl+C 停止。', flush=True)
         invoke(profile, 'serve', local / 'server', profile['environment']['HOTFIX_PUBLIC_KEY_FILE'],
-               extra={'HOTFIX_BIND': '127.0.0.1', 'HOTFIX_PORT': str(port), 'HOTFIX_PUBLISH_TOKEN': token})
+               extra={'HOTFIX_BIND': host, 'HOTFIX_PORT': str(port), 'HOTFIX_PUBLISH_TOKEN': token})
         return
     candidate = state.get('patch')
     require(candidate, '没有待发布补丁，请先成功运行 patch')
@@ -410,8 +425,9 @@ def perform(project, action, yes=False):
     base, receipt = baseline_for(project, {'baseline': candidate['baseline']})
     manifest = read(patch / 'manifest.json')['manifest']
     require(manifest['baselineId'] == receipt['baselineId'], '发布目标与补丁不匹配')
-    origin = read(base / 'baseline/project.json')['updateOrigin']
-    development = local_http(origin)
+    frozen = read(base / 'baseline/project.json')
+    origin = frozen['updateOrigin']
+    development = local_http(origin, frozen.get('allowDevelopmentLan') is True)
     print(f"发布目标: {origin}\nApp: {receipt['appId']} {receipt['release']}\n补丁: {manifest['patchId']}\n基线: {receipt['baselineId']}", flush=True)
     if not yes:
         require(sys.stdin.isatty(), '非交互发布必须显式使用 publish --yes')
@@ -435,9 +451,10 @@ def main():
     for name in ['flutter-sdk', 'android-sdk', 'java-home', 'keys', 'origin']:
         parser.add_argument('--' + name)
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--dev-lan', action='store_true', help='显式允许私有 IPv4 的局域网 HTTP 测试，不用于生产')
     parser.add_argument('--yes', action='store_true')
     args = parser.parse_args()
-    if args.action != 'init' and (args.dry_run or any([args.flutter_sdk, args.android_sdk, args.java_home, args.keys, args.origin])):
+    if args.action != 'init' and (args.dry_run or args.dev_lan or any([args.flutter_sdk, args.android_sdk, args.java_home, args.keys, args.origin])):
         parser.error('路径、origin 和 --dry-run 参数只适用于 init')
     if args.yes and args.action != 'publish':
         parser.error('--yes 只适用于 publish')
