@@ -2,6 +2,8 @@
 
 初始化一次，日常只需要 **构建版本 → 生成补丁 → 确认发布**。以下命令都在你的 Flutter App Git 仓库根目录执行。
 
+喜欢图形界面可在完成首次接入后使用[独立管理后台](console/README.md)：选基础版本和 Git 提交，点击生成、发布或撤回。后台自带本机执行器，无需 Jenkins；第一版需在后台重新构建发行基线，不自动导入历史命令行归档。
+
 ## 1. 第一次接入
 
 先准备固定的 Flutter 3.41.9、定制 Android arm64 DDM Engine、对应 Dart 源码依赖、Android SDK 和 JDK。它们不会由初始化命令自动下载，详见 [Engine 准备](engine/README.md)。普通 Flutter Engine 不能替代定制 Engine。
@@ -73,6 +75,27 @@ adb -s YOUR_TEST_DEVICE_SERIAL reverse tcp:18091 tcp:18091
 ```
 
 安装基线 APK 后生成并发布补丁：第一次启动检查下载，下一次冷启动检查生效。完成后可用 `adb -s YOUR_TEST_DEVICE_SERIAL reverse --remove tcp:18091` 移除转发。快捷命令不会自动操作设备。
+
+### 使用 Wi-Fi 局域网（无需 USB 转发）
+
+首次接入时明确开启开发模式，并填写电脑的私有 IPv4 地址：
+
+```sh
+sh /path/to/flutter-hotfix-runtime/tool/hotfix init --dev-lan --origin http://192.168.1.100:18091
+sh /path/to/flutter-hotfix-runtime/tool/hotfix console --with-delivery
+```
+
+手机与电脑需能通过局域网互相访问。服务仅绑定配置中的电脑 IP；管理后台仍绑定
+`127.0.0.1`。工具只允许 RFC1918 的 IPv4 地址，默认仍拒绝局域网明文 HTTP。
+自动接入生成的 Android 网络策略仅允许该 IP，不允许任意域名或子域明文访问。
+
+已有接入配置不会自动改写。要切换测试地址，需要在 `hotfix.android.json` 设置
+`updateOrigin`、`allowDevelopmentHttp: true`、`allowDevelopmentLan: true`，并把测试 flavor 的
+`hotfix_network_security.xml` 中 domain 改成同一个精确 IP。审查、提交后重新构建并安装基线，
+旧 APK 的服务地址不会改变。电脑 IP 变化也需要更新地址并重新构建基线，推荐固定 DHCP 租约。
+
+局域网 HTTP 仅用于可信测试网络，不提供传输加密。不要使用生产发布凭据，不要将该服务
+暴露公网；正式分发使用 HTTPS。请勿为了连通而关闭整个系统防火墙。
 
 ## 查看状态与注意事项
 

@@ -5,6 +5,9 @@ third-party material. Preserve existing upstream notices when redistributing.
 
 ## Material included in this source repository
 
+The optional management console includes a prebuilt Vue 3 browser runtime.
+Its MIT license is retained in [console notices](console/THIRD_PARTY_NOTICES.md).
+
 Flutter-generated Android project templates/resources and Flutter build patch
 context originate from the Flutter project. These remain BSD-3-Clause licensed:
 see [the retained license](LICENSES/Flutter-BSD-3-Clause.txt). Project changes

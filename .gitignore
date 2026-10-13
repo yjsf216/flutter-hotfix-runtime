@@ -1,4 +1,5 @@
 /outputs/
+/console/web/node_modules/
 /work/
 .DS_Store
 **/.dart_tool/

@@ -6,6 +6,11 @@ Implemented: compile signed DBC3 → authenticated upload + local file storage �
 app check/download → next-start activation → result reports. No management site,
 database, cloud account or production deployment is required.
 
+An optional [local management console](../console/README.md) now provides a
+prebuilt Vue 3 UI, authenticated management API and serial build executor.
+It requires no Jenkins and uses this existing delivery protocol. The `/api/`
+management endpoints are separate from the `/v1/` App delivery endpoints below.
+
 For the current Android Git/APK workflow and phase-three controls, use
 [GIT_WORKFLOW.md](../GIT_WORKFLOW.md). The fixture commands below remain useful
 for the earlier spike; the new loader requires a new base APK and a server with

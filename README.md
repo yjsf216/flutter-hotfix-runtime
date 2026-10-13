@@ -7,6 +7,7 @@ Android/iOS 的有限真机验证及在线补丁闭环已完成；**不是生产
 
 ## Start here
 
+- 图形化操作：[独立管理后台](console/README.md)：选择基础版本和 Git 提交，生成、发布、撤回补丁并查看结果；自带页面和本机执行器，**不依赖 Jenkins**。
 - 首次使用：[Android 简化流程](GETTING_STARTED.md)：初始化一次，日常 `build → patch → publish`。自定义工程见[手动接入与排错](MANUAL_INTEGRATION.md)。
 - 中文入口：[接入、配置与日常发布流程](GIT_WORKFLOW.md)。说明配置文件、
   代码位置、本地补丁服务与正式部署的区别，示例不依赖具体业务项目。
@@ -48,6 +49,7 @@ and result reporting. See [Android/iOS online evidence](delivery/EVIDENCE.md).
 
 | Area | Status | Evidence required to advance |
 |---|---|---|
+| Local management console | Vue 3 prebuilt UI + authenticated management API + serial subprocess executor; reuses existing build/sign/publish tools | remote multi-user authorization, sandboxed workers and wider project validation |
 | Manifest/security contract | P-256, frozen release identity, native transaction/fsync/no-follow store pass in host AOT; Android APK bundles native store | complete Engine/iOS/HAR integration, platform fault tests, trusted anti-replay and key operations |
 | Android 3.41.9 baseline | custom AOT/DDM Engine + signed device patch and online delivery verified | broader semantics, device matrix and production operations |
 | Android external `libapp.so` | research/benchmark only | not a store production backend |
