@@ -8,7 +8,7 @@ Android/iOS 的有限真机验证及在线补丁闭环已完成；**不是生产
 ## Start here
 
 - 图形化操作：[独立管理后台](console/README.md)：选择基础版本和 Git 提交，生成、发布、撤回补丁并查看结果；自带页面和本机执行器，**不依赖 Jenkins**。
-- 首次使用：[Android 简化流程](GETTING_STARTED.md)：初始化一次，日常 `build → patch → publish`。自定义工程见[手动接入与排错](MANUAL_INTEGRATION.md)。
+- 首次使用：[五步流程](GETTING_STARTED.md)：`doctor → init → console`，然后在网页构建基线、生成并发布补丁。缺少工具先看[安装引导](TOOLCHAIN_SETUP.md)。自定义工程见[手动接入与排错](MANUAL_INTEGRATION.md)。
 - 中文入口：[接入、配置与日常发布流程](GIT_WORKFLOW.md)。说明配置文件、
   代码位置、本地补丁服务与正式部署的区别，示例不依赖具体业务项目。
 - New: [project CLI and independent order repair example](examples/order_app/README.md).
@@ -142,6 +142,6 @@ See [TECHNICAL_ROUTE.md](TECHNICAL_ROUTE.md), [DYNAMIC_MODULES_AUDIT.md](DYNAMIC
 
 ## Explicit non-goals for now
 
-- No dashboard, database, multi-tenant service, plugin abstraction, or custom CDN protocol.
+- No hosted multi-tenant service, database requirement, plugin abstraction, or custom CDN protocol. An optional local management console is included.
 - No claim that Android, OHOS, or iOS is supported before its real-device gate passes.
 - No copying of unavailable Shorebird sources or inference about unpublished Shiply internals.

@@ -10,13 +10,13 @@ from pathlib import Path
 import re
 import secrets
 import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
 from urllib.parse import urlsplit
 
 from android_release import ROOT, digest, head, read, require, run
+import toolchain
 
 ENTRY = '''import 'dart:io';
 import 'package:flutter/widgets.dart';
@@ -112,42 +112,21 @@ def local_http(origin, allow_lan=False):
 
 def tools_environment(args, previous):
     saved = previous.get('environment', {})
-    flutter_default = saved.get('FLUTTER_SDK', os.environ.get('FLUTTER_SDK', ''))
-    if not flutter_default and shutil.which('flutter'):
-        flutter_default = str(Path(shutil.which('flutter')).resolve().parent.parent)
-    flutter = Path(args.flutter_sdk or ask('Flutter 3.41.9 SDK 路径', flutter_default)).expanduser().resolve()
-    sdk = Path(args.android_sdk or ask('Android SDK 路径', saved.get('ANDROID_SDK_ROOT',
-        os.environ.get('ANDROID_SDK_ROOT', os.environ.get('ANDROID_HOME', ''))))).expanduser().resolve()
-    java = Path(args.java_home or ask('JDK 路径', saved.get('JAVA_HOME', os.environ.get('JAVA_HOME', '')))).expanduser().resolve()
-    builds = sorted((sdk / 'build-tools').glob('*'),
-                    key=lambda p: [int(n) for n in re.findall(r'\d+', p.name)])
-    build_tools = saved.get('ANDROID_BUILD_TOOLS') or os.environ.get('ANDROID_BUILD_TOOLS')
-    if not build_tools:
-        build_tools = next((str(p) for p in reversed(builds) if (p / 'apksigner').is_file()), '')
-    generator = saved.get('GEN_SNAPSHOT', os.environ.get('GEN_SNAPSHOT', str(ROOT /
-        'work/upstream/flutter-engine-ddm/engine/src/out/hotfix_android_release_arm64/artifacts_arm64/gen_snapshot_arm64')))
-    result = {'FLUTTER_SDK': str(flutter), 'DART_BIN': str(flutter / 'bin/cache/dart-sdk/bin/dart'),
-              'ANDROID_SDK_ROOT': str(sdk), 'JAVA_HOME': str(java),
-              'ANDROID_BUILD_TOOLS': build_tools, 'GEN_SNAPSHOT': generator,
-              'DART_SDK_SOURCE': str(ROOT / 'work/upstream/dart-sdk')}
+    defaults = toolchain.discover(args, saved)
+    labels = {'flutter_sdk': 'Flutter 3.41.9 SDK 路径', 'android_sdk': 'Android SDK 路径',
+              'java_home': 'JDK 17 路径', 'dart_sdk_source': '固定 Dart 源码路径',
+              'gen_snapshot': '定制 Android gen_snapshot 路径'}
+    selected = {name: getattr(args, name, None) or ask(label, defaults[toolchain.PATH_OPTIONS[name]])
+                for name, label in labels.items()}
+    result = toolchain.discover(argparse.Namespace(**selected), saved)
     validate_tools(result)
     return result
 
 
 def validate_tools(env):
-    require(shutil.which('openssl'), '缺少 OpenSSL，无法生成或签署补丁')
-    for name, path in {
-        'Flutter': Path(env['FLUTTER_SDK']) / 'bin/flutter', 'Dart': Path(env['DART_BIN']),
-        'JDK': Path(env['JAVA_HOME']) / 'bin/java',
-        'aapt': Path(env['ANDROID_BUILD_TOOLS']) / 'aapt',
-        'apksigner': Path(env['ANDROID_BUILD_TOOLS']) / 'apksigner',
-        '定制 gen_snapshot': Path(env['GEN_SNAPSHOT']),
-        '定制 Engine': Path(env['GEN_SNAPSHOT']).parent.parent / 'lib.stripped/libflutter.so',
-        'Dart 源码依赖': Path(env['DART_SDK_SOURCE']) / '.dart_tool/package_config.json',
-    }.items():
-        require(path.is_file(), f'缺少 {name}: {path}。请先完成 engine/README.md 的工具链准备')
-    version = Path(env['FLUTTER_SDK']) / 'bin/internal/engine.version'
-    require(version.read_text().strip() == '42d3d75a56efe1a2e9902f52dc8006099c45d937', '需要固定 Flutter 3.41.9 工具链')
+    failures = [c for c in toolchain.inspect(env) if not c['ok']]
+    require(not failures, '工具链检查失败；运行 hotfix doctor --guide 查看安装步骤：\n' +
+            '\n'.join(c['name'] + ': ' + c['hint'] for c in failures))
 
 
 def tool_stamp():
@@ -169,7 +148,7 @@ def app_info(project, env):
                            ROOT / 'tool/app_info.dart', project / 'pubspec.yaml'], capture=True, env={**os.environ, **env}))
 
 
-def integration_plan(project, info, origin, allow_lan=False):
+def integration_plan(project, info, origin, allow_lan=False, dart_source=None):
     """Only a recognizable plain FlutterActivity template is edited automatically."""
     config_file = project / 'hotfix.android.json'
     if config_file.exists():
@@ -208,7 +187,8 @@ def integration_plan(project, info, origin, allow_lan=False):
     spec = pubspec.read_text()
     require(re.search(r'^dependencies:\s*(?:#.*)?$', spec, re.M), '不支持内联 dependencies，请手动接入')
     runtime_path = json.dumps(os.path.relpath(ROOT / 'spikes/patch_ir_spike', project))
-    shared_path = json.dumps(os.path.relpath(ROOT / 'work/upstream/dart-sdk/pkg/_fe_analyzer_shared', project))
+    source = Path(dart_source) if dart_source else ROOT / 'work/upstream/dart-sdk'
+    shared_path = json.dumps(os.path.relpath(source / 'pkg/_fe_analyzer_shared', project))
     spec = re.sub(r'^(dependencies:[ \t]*(?:#.*)?)$',
                   lambda m: m[0] + '\n  patch_ir_spike:\n    path: ' + runtime_path, spec, count=1, flags=re.M)
     override = '\n  _fe_analyzer_shared:\n    path: ' + shared_path
@@ -270,7 +250,8 @@ def initialize(project, args):
     env = tools_environment(args, previous)
     info = app_info(project, env)
     require(isinstance(info['version'], str) and re.fullmatch(r'[0-9A-Za-z.+_-]+', info['version']), 'pubspec.yaml 必须有明确的 version')
-    plan, config = integration_plan(project, info, args.origin, getattr(args, 'dev_lan', False))
+    plan, config = integration_plan(project, info, args.origin, getattr(args, 'dev_lan', False),
+                                    env.get('DART_SDK_SOURCE'))
     key_default = previous.get('keys') or (str(Path(os.environ['HOTFIX_PUBLIC_KEY_FILE']).parent)
         if os.environ.get('HOTFIX_PUBLIC_KEY_FILE') else str(local / 'keys'))
     keys = Path(args.keys or ask('补丁密钥目录（不存在时生成测试密钥）', key_default)).expanduser().resolve()
@@ -301,6 +282,7 @@ def initialize(project, args):
         tracked_key = run(['git', 'ls-files', '--', relative + '/private.pem'], project, True)
         require(hidden_keys.returncode == 0 and not tracked_key.strip(), 'App 内密钥目录必须整体忽略且私钥不能已被跟踪；建议使用仓库外目录')
     local.mkdir(exist_ok=True, mode=0o700)
+    toolchain.bind_runtime_sdk(env)
     if plan:
         backup = local / 'backups' / secrets.token_hex(6)
         originals = {p: p.read_bytes() if p.exists() else None for p in plan}
@@ -330,8 +312,8 @@ def initialize(project, args):
     run([Path(env['FLUTTER_SDK']) / 'bin/flutter', 'pub', 'get'], project, env=environment)
     profile['ready'] = True
     save(profile_file, profile)
-    print('初始化完成。审查并提交 App 接入改动后，运行 ./.hotfix/run build。')
-    print('日常命令：./.hotfix/run build | patch | publish | serve | status')
+    print('初始化完成。审查、测试并提交接入改动后，运行 ./.hotfix/run console --with-delivery。')
+    print('也可使用命令行：./.hotfix/run doctor | build | patch | publish | serve | status')
     print('首次使用仍需验收启动与业务健康检查；不会自动安装 App 或发布补丁。')
 
 
@@ -446,15 +428,20 @@ def perform(project, action, yes=False):
 
 
 def main():
+    # Existing project launchers also gain these commands without reinitializing.
+    if sys.argv[1:2] in (['console'], ['doctor']):
+        script = ROOT / ('console/server.py' if sys.argv[1] == 'console' else 'tool/toolchain.py')
+        os.execv(sys.executable, [sys.executable, '-B', str(script), *sys.argv[2:]])
     parser = argparse.ArgumentParser(description='在 App 根目录使用的简化入口，不自动提交/安装/推送')
     parser.add_argument('action', choices=['init', 'build', 'patch', 'publish', 'serve', 'status'])
-    for name in ['flutter-sdk', 'android-sdk', 'java-home', 'keys', 'origin']:
+    for name in ['flutter-sdk', 'android-sdk', 'java-home', 'dart-sdk-source', 'gen-snapshot', 'keys', 'origin']:
         parser.add_argument('--' + name)
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--dev-lan', action='store_true', help='显式允许私有 IPv4 的局域网 HTTP 测试，不用于生产')
     parser.add_argument('--yes', action='store_true')
     args = parser.parse_args()
-    if args.action != 'init' and (args.dry_run or args.dev_lan or any([args.flutter_sdk, args.android_sdk, args.java_home, args.keys, args.origin])):
+    if args.action != 'init' and (args.dry_run or args.dev_lan or any([args.flutter_sdk, args.android_sdk, args.java_home,
+                                                                   args.dart_sdk_source, args.gen_snapshot, args.keys, args.origin])):
         parser.error('路径、origin 和 --dry-run 参数只适用于 init')
     if args.yes and args.action != 'publish':
         parser.error('--yes 只适用于 publish')

@@ -7,11 +7,11 @@
 ## 首次使用
 
 1. 按 [首次接入](../GETTING_STARTED.md)准备固定工具链，在 App Git 根目录运行
-   `hotfix init`，审查、测试并提交接入改动。当前工具链仍需自行准备，后台不会自动下载 Engine。
+   `hotfix doctor --guide` 和 `hotfix init`，审查、测试并提交接入改动。安装步骤见[准备指南](../TOOLCHAIN_SETUP.md)，后台不会自动下载 Engine。
 2. 仍在 App 根目录运行：
 
    ```sh
-   sh /path/to/flutter-hotfix-runtime/tool/hotfix console --with-delivery
+   ./.hotfix/run console --with-delivery
    ```
 
    默认管理页面是 `http://127.0.0.1:8765`。`--with-delivery` 同时启动配置中
@@ -160,7 +160,7 @@ npm run build
 
 ## 局域网开发测试
 
-按照[Wi-Fi 测试接入](../GETTING_STARTED.md#使用-wi-fi-局域网无需-usb-转发)显式开启
+按照[Wi-Fi 测试接入](../GETTING_STARTED.md#2-初始化-app)显式开启
 `--dev-lan`，或手动适配已有配置及 Android 精确网络白名单，重新构建基础 APK。
 `console --with-delivery` 将分发服务绑定到配置里的私有 IPv4，管理页面仍只监听本机。
 发布、撤回和统计均使用冻结基线里的局域网测试地址，不允许网页任意替换目标。

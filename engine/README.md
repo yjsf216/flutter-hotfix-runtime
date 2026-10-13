@@ -1,5 +1,9 @@
 # Isolated Flutter Engine DDM build
 
+For first-time installation, start with [toolchain setup and doctor](../TOOLCHAIN_SETUP.md).
+The sections below retain dated reproduction evidence and historical preflight states;
+current Android acceptance is recorded in [ANDROID_ACCEPTANCE.md](../ANDROID_ACCEPTANCE.md).
+
 The **host Engine verification gate has passed**; this is not a fourth supported
 application platform. Android, iOS and OHOS still need their own Engine builds,
 packaging and execution gates. No device or simulator is used here.

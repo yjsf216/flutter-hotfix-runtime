@@ -69,6 +69,19 @@ class AppCliCheck(unittest.TestCase):
             app.integration_plan(self.root, self.info, 'http://127.0.0.1:18091')
         self.assertFalse((self.root / '.hotfix').exists())
 
+    def test_external_dart_source_is_used_for_app_override(self):
+        source = self.root / 'explicit-sdk'
+        plan, _ = app.integration_plan(self.root, self.info, 'https://patches.example.com', dart_source=source)
+        self.assertIn('explicit-sdk/pkg/_fe_analyzer_shared', plan[self.root / 'pubspec.yaml'])
+
+    def test_tool_paths_can_be_explicit_without_author_work_directory(self):
+        args = argparse.Namespace(flutter_sdk='/tools/flutter', android_sdk='/tools/android',
+                                  java_home='/tools/jdk', dart_sdk_source='/tools/dart', gen_snapshot='/tools/engine/generator')
+        with patch.object(app, 'validate_tools'):
+            env = app.tools_environment(args, {})
+        self.assertEqual(env['DART_SDK_SOURCE'], '/tools/dart')
+        self.assertEqual(env['GEN_SNAPSHOT'], '/tools/engine/generator')
+
     def test_groovy_https_and_conflicts(self):
         content = self.gradle.read_text().replace('applicationId =', 'applicationId')
         self.gradle.unlink()
