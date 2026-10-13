@@ -205,7 +205,15 @@ class DeliveryServer {
       }
       _atomic('${verified.artifactSha256}.blob', bytes);
       _atomic(record, envelope);
-      _atomic('$baseline.latest', envelope);
+      final latest = _file('$baseline.latest');
+      // A historical withdrawal must not stop a different current patch.
+      if (!verified.revoked ||
+          !latest.existsSync() ||
+          (jsonDecode(latest.readAsStringSync())
+                  as Map)['manifest']['patchId'] ==
+              verified.patchId) {
+        _atomic('$baseline.latest', envelope);
+      }
       req.response.statusCode = 201;
       req.response.write(
         jsonEncode({'baselineId': baseline, 'patchId': verified.patchId}),

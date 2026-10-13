@@ -287,7 +287,12 @@ Future<void> main() async {
     var policyTime = DateTime.now().toUtc().subtract(
       const Duration(seconds: 20),
     );
-    Future<List<int>> policy(int rollout, bool revoke) async {
+    Future<List<int>> policy(
+      int rollout,
+      bool revoke, {
+      String? baselineId,
+      String? patchId,
+    }) async {
       final payload = Map<String, dynamic>.from(
         (jsonDecode(envelope.readAsStringSync()) as Map)['manifest'] as Map,
       );
@@ -295,6 +300,8 @@ Future<void> main() async {
       payload['issuedAt'] = '${policyTime.toIso8601String().split('.').first}Z';
       payload['rolloutPercent'] = rollout;
       payload['revoked'] = revoke;
+      if (baselineId != null) payload['baselineId'] = baselineId;
+      if (patchId != null) payload['patchId'] = patchId;
       final input = File('${temp.path}/policy-input.json')
         ..writeAsStringSync(jsonEncode(payload));
       final signed = File('${temp.path}/policy-signed.json');
@@ -379,6 +386,106 @@ Future<void> main() async {
     loader.close();
     print(
       'PASS: durable outbox/restart retry, event deduplication, authenticated statistics, pause/resume, sticky rollout, signed permanent withdrawal',
+    );
+    final historyBaseline = 'c' * 64;
+    final p1 = await policy(
+      100,
+      false,
+      baselineId: historyBaseline,
+      patchId: 'p1',
+    );
+    final p2 = await policy(
+      100,
+      false,
+      baselineId: historyBaseline,
+      patchId: 'p2',
+    );
+    require(await publishPolicy(p1) == 201, 'history P1 publication');
+    require(await publishPolicy(p2) == 201, 'history P2 publication');
+    final withdrawP1 = await policy(
+      0,
+      true,
+      baselineId: historyBaseline,
+      patchId: 'p1',
+    );
+    require(await publishPolicy(withdrawP1) == 201, 'historical P1 withdrawal');
+    require(
+      await publishPolicy(withdrawP1) == 201,
+      'historical P1 withdrawal retry',
+    );
+    final checkUri = origin
+        .resolve('/v1/check')
+        .replace(queryParameters: {'baselineId': historyBaseline});
+    require(
+      base64.encode((await network.get(checkUri)).bodyBytes) ==
+          base64.encode(p2),
+      'historical withdrawal replaced current P2 distribution',
+    );
+    final historyVerifier = SignedManifestVerifier(
+      baselineId: historyBaseline,
+      releaseIdentity: releaseIdentity,
+      publicKeys: publicKeys,
+    );
+    final freshLoader = SignedPatchLoader(
+      root: Directory('${temp.path}/history-client'),
+      verifier: historyVerifier,
+    );
+    try {
+      final freshUpdates = UpdateClient(
+        freshLoader,
+        origin,
+        allowDevelopmentHttp: true,
+      );
+      require(
+        await freshUpdates.checkAndDownload() == 'downloaded' &&
+            freshLoader.store.readVerified('p2') != null,
+        'fresh client could not download P2 after historical P1 withdrawal',
+      );
+      final withdrawP2 = await policy(
+        0,
+        true,
+        baselineId: historyBaseline,
+        patchId: 'p2',
+      );
+      require(await publishPolicy(withdrawP2) == 201, 'current P2 withdrawal');
+      require(
+        await publishPolicy(withdrawP2) == 201,
+        'current P2 withdrawal retry',
+      );
+      require(
+        historyVerifier.verify((await network.get(checkUri)).bodyBytes) ==
+                null &&
+            await freshUpdates.checkAndDownload() == 'withdrawn' &&
+            freshLoader.store.readVerified('p2') == null,
+        'current withdrawal left P2 available',
+      );
+      final withdrawals =
+          jsonDecode(
+                (await network.get(
+                  origin
+                      .resolve('/v1/withdrawals')
+                      .replace(
+                        queryParameters: {'baselineId': historyBaseline},
+                      ),
+                )).body,
+              )
+              as List;
+      final withdrawnIds = withdrawals
+          .map(
+            (encoded) => historyVerifier
+                .verify(base64.decode(encoded as String), allowRevocation: true)
+                ?.patchId,
+          )
+          .toSet();
+      require(
+        withdrawals.length == 2 && withdrawnIds.containsAll(['p1', 'p2']),
+        'withdrawal feed lost a signed policy or duplicated a retry',
+      );
+    } finally {
+      freshLoader.close();
+    }
+    print(
+      'PASS: historical withdrawal preserves current patch; current withdrawal stops distribution',
     );
     // Exercise a real interrupted response, not merely an offline connection.
     final flaky = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
