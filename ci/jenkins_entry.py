@@ -103,6 +103,9 @@ def trim_build_cache(project):
 
 
 def baseline(args, config, catalogue, source, ref):
+    if not getattr(args, 'resume_directory', None):
+        require(shutil.disk_usage(catalogue.root).free >= 8 * 1024**3,
+                'New baseline requires at least 8 GiB free on the CI volume')
     directory = (catalogue.owned(args.resume_directory / 'archive')
                  if getattr(args, 'resume_directory', None) else catalogue.allocate())
     project = directory / 'project'

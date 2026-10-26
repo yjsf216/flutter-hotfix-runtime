@@ -10,6 +10,13 @@ import jenkins_entry as runner
 
 
 class RunnerCheck(unittest.TestCase):
+    def test_low_disk_stops_before_allocating_a_new_checkout(self):
+        catalogue=unittest.mock.Mock();catalogue.root=Path('/unused')
+        with patch.object(runner.shutil,'disk_usage',return_value=argparse.Namespace(free=0)):
+            with self.assertRaisesRegex(ValueError,'8 GiB'):
+                runner.baseline(argparse.Namespace(resume_directory=None),{},catalogue,Path('/unused'),'a'*40)
+        catalogue.allocate.assert_not_called()
+
     def test_patch_routes_to_baseline_pinned_tool_release(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);cat=runner.Catalogue(root/'data');directory=cat.allocate()
