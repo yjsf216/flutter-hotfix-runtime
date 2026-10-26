@@ -59,13 +59,14 @@ def verify(archive, receipt):
             require(hashlib.sha256(bundle.read(name)).hexdigest() == sha, 'IPA content changed: ' + name)
 
 
-def release(config_path, output):
+def release(config_path, output, resume=False):
     config_path = config_path.resolve()
     config = read(config_path)
     require(config['platform'] == 'ios', 'iOS only')
     project = (config_path.parent / config['project']).resolve()
     commit = head(project)
-    require(not output.exists(), 'Use fresh output; completed archives are immutable')
+    require(not (output / 'ios-release.json').exists(), 'Completed archives are immutable')
+    require(output.is_dir() if resume else not output.exists(), 'Use fresh output, or explicit --resume-packaging')
     bundle = engine_bundle.from_project(project, 'ios')
     if bundle:
         os.environ.update(bundle)
@@ -95,24 +96,34 @@ def release(config_path, output):
     generator = Path(os.environ['GEN_SNAPSHOT']).resolve()
     engine = generator.parent.parent / 'Flutter.framework'
     require((engine / 'Flutter').is_file(), 'Matching iOS DDM Engine missing')
-    output.mkdir(parents=True)
+    output.mkdir(parents=True, exist_ok=resume)
     config = {**config, 'project': str(project)}
     config_path = output / 'resolved-config.json'
-    write(config_path, config)
+    if resume:
+        require(read(config_path) == config, 'Resolved native build configuration changed')
+    else:
+        write(config_path, config)
     git_directory = Path(run(['git', 'rev-parse', '--absolute-git-dir'], project, True).strip())
     with open(git_directory / 'hotfix-build.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        run([flutter / 'bin/flutter', 'build', 'ios', '--release', '--no-pub', '--no-codesign',
-             '--target', config['entry'], '--build-name', version, '--build-number', code,
-             *['--dart-define=' + k + '=' + v for k, v in defines.items()]], project)
-        run(['xcodebuild', '-workspace', project / 'ios/Runner.xcworkspace', '-scheme', 'Runner',
-             '-configuration', 'Release', '-destination', 'generic/platform=iOS',
-             '-derivedDataPath', output / 'native-build', '-allowProvisioningUpdates',
-             'DEVELOPMENT_TEAM=' + native_config['team'], 'CODE_SIGN_STYLE=Automatic',
-             'ARCHS=arm64', 'ONLY_ACTIVE_ARCH=YES', *native_settings, 'build'], project)
+        if not resume:
+            run([flutter / 'bin/flutter', 'build', 'ios', '--release', '--no-pub', '--no-codesign',
+                 '--target', config['entry'], '--build-name', version, '--build-number', code,
+                 *['--dart-define=' + k + '=' + v for k, v in defines.items()]], project)
+            run(['xcodebuild', '-workspace', project / 'ios/Runner.xcworkspace', '-scheme', 'Runner',
+                 '-configuration', 'Release', '-destination', 'generic/platform=iOS',
+                 '-derivedDataPath', output / 'native-build', '-allowProvisioningUpdates',
+                 'DEVELOPMENT_TEAM=' + native_config['team'], 'CODE_SIGN_STYLE=Automatic',
+                 'ARCHS=arm64', 'ONLY_ACTIVE_ARCH=YES', *native_settings, 'build'], project)
         require(head(project) == commit, 'Native build modified source; inspect and commit generated native inputs')
         native = output / 'native-build/Build/Products/Release-iphoneos/Runner.app'
         require(native.is_dir(), 'Runner.app missing')
+        if os.environ.get('HOTFIX_CI_TRIM_BUILD_CACHE') == 'true':
+            require(not run(['git', 'ls-files', '--', 'build'], project, True).strip(), 'Tracked build directory')
+            for temporary in [project / 'build', output / 'native-build/Build/Intermediates.noindex',
+                              output / 'native-build/ModuleCache.noindex', output / 'native-build/Index.noindex']:
+                require(not temporary.is_symlink(), 'Refuse linked build cache')
+                if temporary.is_dir(): shutil.rmtree(temporary)
         info = plistlib.loads((native / 'Info.plist').read_bytes())
         require(info['CFBundleIdentifier'] == config['appId'] and
                 info['CFBundleShortVersionString'] + '+' + info['CFBundleVersion'] == config['release'], 'Native identity mismatch')
@@ -127,12 +138,22 @@ def release(config_path, output):
         entitlement_file = output / 'entitlements.plist'
         entitlement_file.write_bytes(plistlib.dumps(plistlib.loads(entitlements.encode())))
         baseline = output / 'baseline'
-        cli('release-git', config_path, baseline)
+        if not resume or not (baseline / 'project.json').is_file():
+            if resume and baseline.exists():
+                require(not baseline.is_symlink(), 'Refuse linked incomplete baseline')
+                shutil.rmtree(baseline)
+            cli('release-git', config_path, baseline)
         metadata = read(baseline / 'project.json')
         require(metadata['gitCommit'] == commit and metadata['generatorSha256'] == digest(generator), 'Frozen baseline mismatch')
         for relative, sha in metadata['sources'].items():
             require(digest(project / relative) == sha, 'Frozen input changed: ' + relative)
         payload = output / 'Payload'
+        if resume:
+            require(not payload.is_symlink(), 'Refuse linked payload')
+            if payload.is_dir(): shutil.rmtree(payload)
+            previous_ipa = output / 'app.ipa'
+            require(not previous_ipa.is_symlink(), 'Refuse linked IPA')
+            if previous_ipa.exists(): previous_ipa.unlink()
         payload.mkdir()
         app = payload / 'Runner.app'
         shutil.copytree(native, app)
@@ -164,10 +185,10 @@ def release(config_path, output):
         symbols = run(['xcrun', 'nm', '-gU', app / info['CFBundleExecutable']], capture=True)
         require(all('_psio_' + name in symbols for name in ('set_app_base', 'open_root', 'close', 'lock', 'unlock', 'read', 'replace', 'free')), 'Native store exports missing')
         ipa = output / 'app.ipa'
-        with zipfile.ZipFile(ipa, 'x', compression=zipfile.ZIP_DEFLATED) as bundle:
+        with zipfile.ZipFile(ipa, 'x', compression=zipfile.ZIP_DEFLATED) as ipa_zip:
             for file in sorted(app.rglob('*')):
                 if file.is_file():
-                    bundle.write(file, str(file.relative_to(output)))
+                    ipa_zip.write(file, str(file.relative_to(output)))
         receipt = {'schemaVersion': 1, 'platform': 'ios', 'appId': config['appId'], 'release': config['release'],
                    'gitCommit': commit, 'baselineId': read(baseline / 'release/release.json')['baselineId'],
                    'ipaSha256': digest(ipa), 'teamId': native_config['team'], 'certificateSha256': digest(certificate),
@@ -196,8 +217,9 @@ def patch(archive, ref, output, keys, patch_id):
 
 if __name__ == '__main__':
     try:
-        if len(sys.argv) == 4 and sys.argv[1] == 'release-ios':
-            release(Path(sys.argv[2]), Path(sys.argv[3]).resolve())
+        if sys.argv[1:2] == ['release-ios'] and (len(sys.argv) == 4 or
+                len(sys.argv) == 5 and sys.argv[4] == '--resume-packaging'):
+            release(Path(sys.argv[2]), Path(sys.argv[3]).resolve(), resume=len(sys.argv) == 5)
         elif len(sys.argv) == 7 and sys.argv[1] == 'patch-ios':
             patch(Path(sys.argv[2]).resolve(), sys.argv[3], Path(sys.argv[4]).resolve(), Path(sys.argv[5]).resolve(), sys.argv[6])
         else:

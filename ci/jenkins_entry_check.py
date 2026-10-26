@@ -10,6 +10,24 @@ import jenkins_entry as runner
 
 
 class RunnerCheck(unittest.TestCase):
+    def test_patch_routes_to_baseline_pinned_tool_release(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);cat=runner.Catalogue(root/'data');directory=cat.allocate()
+            pinned=root/'old-tools/ci/jenkins_entry.py';pinned.parent.mkdir(parents=True);pinned.write_text('# fixture')
+            identity='b'*64
+            runner.save(cat.index,{identity:{'archive':str(directory/'archive')}})
+            runner.save(directory/'ci-build.json',{'toolsRoot':str(pinned.parent.parent)})
+            token=root/'token';token.write_text('x'*24)
+            config=root/'config.json';runner.save(config,{'environment':{},'dataRoot':str(cat.root),
+                'origin':'https://updates.example.com','uploadTokenFile':str(token)})
+            argv=['runner','--config',str(config),'--mode','patch','--platform','android',
+                  '--source',str(root),'--commit','a'*40,'--branch','test','--baseline-id',identity,
+                  '--result',str(root/'result.json')]
+            with patch.object(runner.sys,'argv',argv),patch.object(runner,'commit',return_value='a'*40), \
+                 patch.object(runner,'run') as execute,patch.dict(runner.os.environ):
+                runner.main()
+            self.assertIn(str(pinned),execute.call_args.args[0])
+
     def test_completed_archive_retry_uploads_without_recompiling(self):
         with tempfile.TemporaryDirectory() as temp, ExitStack() as stack:
             root=Path(temp);project=root/'project';archive=root/'archive'

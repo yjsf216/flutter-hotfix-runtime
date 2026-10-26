@@ -85,6 +85,7 @@ def environment(config, project, platform):
     # Release Gradle's heap before the separate AOT compiler runs on small nodes.
     env['GRADLE_OPTS'] = env.get('GRADLE_OPTS', '') + ' -Dorg.gradle.daemon=false'
     env['HOTFIX_AOT_HEAP_MB'] = str(config.get('aotHeapMB', 3072))
+    env['HOTFIX_CI_TRIM_BUILD_CACHE'] = 'true'
     env['HOTFIX_UPLOAD_TOKEN'] = Path(config['uploadTokenFile']).read_text().strip()
     env['HOTFIX_PUBLIC_KEY_FILE'] = str(Path(config['keys']) / 'public-key.txt')
     env['HOTFIX_MANIFEST_TTL_SECONDS'] = str(config.get('manifestTTLSeconds', 604800))
@@ -135,17 +136,17 @@ def baseline(args, config, catalogue, source, ref):
     completed = archive / (args.platform + '-release.json')
     if getattr(args, 'resume_directory', None) and completed.is_file():
         previous = read(directory / 'ci-build.json')
-        require(previous == {'toolStamp': stamp, 'sourceCommit': ref}, 'Completed archive tools or source differ')
+        require(previous['toolStamp'] == stamp and previous['sourceCommit'] == ref,
+                'Completed archive tools or source differ')
     elif getattr(args, 'resume_directory', None):
-        require(args.platform == 'android', 'Only Android packaging supports resume')
-        cli('release-android', generated, archive, '--resume-packaging')
+        cli('release-' + args.platform, generated, archive, '--resume-packaging')
     else:
         cli('release-' + args.platform, generated, archive)
     require(tool_stamp() == stamp, 'Build tools changed during baseline compilation')
     receipt = read(archive / (args.platform + '-release.json'))
     require(receipt['gitCommit'] == ref, 'Baseline commit mismatch')
     require(digest(Path(config['keys']) / 'public-key.txt') == receipt['publicKeySha256'], 'Signing key differs from archive')
-    save(directory / 'ci-build.json', {'toolStamp': stamp, 'sourceCommit': ref})
+    save(directory / 'ci-build.json', {'toolStamp': stamp, 'sourceCommit': ref, 'toolsRoot': str(TOOLS)})
     upload_baseline.upload(config['origin'], archive, args.branch, ref)
     frozen = read(archive / 'baseline/project.json')
     channel = (frozen.get('dartDefines', {}).get('APP_CHANNEL') or
@@ -218,10 +219,15 @@ def main():
         match = re.search(r'([a-f0-9]{64})$', args.baseline_id)
         require(match, 'Select a completed baseline first')
         args.baseline_id = match[1]
+        row = catalogue.rows().get(args.baseline_id)
+        require(row is not None, 'Selected baseline is not available on this node')
+        directory = catalogue.owned(Path(row['archive']))
+        pinned = Path(read(directory / 'ci-build.json').get('toolsRoot', str(TOOLS)))
+        require((pinned / 'ci/jenkins_entry.py').is_file(), 'Baseline-matched tools are missing')
         # Renew the server lease while the trusted child runs. Its process group
         # is terminated if lease renewal fails; no admin/publish token is used.
         os.environ['HOTFIX_UPLOAD_TOKEN'] = Path(config['uploadTokenFile']).read_text().strip()
-        command = [sys.executable, str(Path(__file__).resolve()), '--config', str(args.config.resolve()),
+        command = [sys.executable, str(pinned / 'ci/jenkins_entry.py'), '--config', str(args.config.resolve()),
                    '--mode', 'patch-inner', '--platform', args.platform, '--source', str(source),
                    '--commit', ref, '--branch', args.branch, '--baseline-id', args.baseline_id,
                    '--result', str(args.result.resolve())]
