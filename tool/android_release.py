@@ -207,7 +207,10 @@ def release(config_path, output, resume=False):
         require(original_info['appId'] == config['appId'] and original_info['release'] == config['release'],
                 'Native APK identity differs from configuration')
         baseline = output / 'baseline'
-        if not resume:
+        if not resume or not (baseline / 'project.json').is_file():
+            if resume and baseline.exists():
+                require(not baseline.is_symlink(), 'Refuse linked incomplete baseline')
+                shutil.rmtree(baseline)
             cli('release-git', config_path, baseline)
         metadata = read(baseline / 'project.json')
         require(metadata['gitCommit'] == commit, 'Baseline Git mismatch')

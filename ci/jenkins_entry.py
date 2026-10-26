@@ -82,6 +82,9 @@ def environment(config, project, platform):
     env = {**os.environ, **env}
     if env.get('ANDROID_SDK_ROOT'):
         env['ANDROID_HOME'] = env['ANDROID_SDK_ROOT']
+    # Release Gradle's heap before the separate AOT compiler runs on small nodes.
+    env['GRADLE_OPTS'] = env.get('GRADLE_OPTS', '') + ' -Dorg.gradle.daemon=false'
+    env['HOTFIX_AOT_HEAP_MB'] = str(config.get('aotHeapMB', 3072))
     env['HOTFIX_UPLOAD_TOKEN'] = Path(config['uploadTokenFile']).read_text().strip()
     env['HOTFIX_PUBLIC_KEY_FILE'] = str(Path(config['keys']) / 'public-key.txt')
     env['HOTFIX_MANIFEST_TTL_SECONDS'] = str(config.get('manifestTTLSeconds', 604800))
@@ -99,8 +102,11 @@ def trim_build_cache(project):
 
 
 def baseline(args, config, catalogue, source, ref):
-    directory = catalogue.allocate()
+    directory = (catalogue.owned(args.resume_directory / 'archive')
+                 if getattr(args, 'resume_directory', None) else catalogue.allocate())
     project = directory / 'project'
+    if getattr(args, 'resume_directory', None):
+        require(head(project) == ref, 'Resume requires the original native build commit')
     source_directory(source, project, ref, Path(config['dataRoot']) / 'git-cache')
     # Resolve dependencies once for a new base. Patch tasks never run pub get.
     preliminary = {**os.environ, **config['environment']}
@@ -126,7 +132,11 @@ def baseline(args, config, catalogue, source, ref):
     archive = directory / 'archive'
     os.environ.update(env)
     stamp = tool_stamp()
-    cli('release-' + args.platform, generated, archive)
+    if getattr(args, 'resume_directory', None):
+        require(args.platform == 'android', 'Only Android packaging supports resume')
+        cli('release-android', generated, archive, '--resume-packaging')
+    else:
+        cli('release-' + args.platform, generated, archive)
     require(tool_stamp() == stamp, 'Build tools changed during baseline compilation')
     receipt = read(archive / (args.platform + '-release.json'))
     require(receipt['gitCommit'] == ref, 'Baseline commit mismatch')
@@ -186,6 +196,7 @@ def main():
     parser.add_argument('--branch', required=True)
     parser.add_argument('--baseline-id', default='')
     parser.add_argument('--result', type=Path, required=True)
+    parser.add_argument('--resume-directory', type=Path)
     args = parser.parse_args()
     config = read(args.config)
     source = args.source.resolve(); ref = commit(source, args.commit)

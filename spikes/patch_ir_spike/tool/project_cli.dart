@@ -31,8 +31,9 @@ Future<void> run(String executable, List<String> args) async {
     args,
     mode: ProcessStartMode.inheritStdio,
   );
-  if (await p.exitCode != 0)
-    fail('command failed: ${File(executable).uri.pathSegments.last}');
+  final exitCode = await p.exitCode;
+  if (exitCode != 0)
+    fail('command failed: ${File(executable).uri.pathSegments.last} (exit $exitCode)');
 }
 
 Map<String, dynamic> json(File f) =>
@@ -408,7 +409,13 @@ Future<void> command(List<String> args, {bool projectPatch = false}) async {
         if (check.existsSync()) check.deleteSync(recursive: true);
       }
     }
+    final heap = Platform.environment['HOTFIX_AOT_HEAP_MB'];
+    if (heap != null &&
+        (int.tryParse(heap) == null || int.parse(heap) < 256 || int.parse(heap) > 32768)) {
+      fail('HOTFIX_AOT_HEAP_MB must be between 256 and 32768');
+    }
     await run(generator.path, [
+      if (heap != null) '--old_gen_heap_size=$heap',
       '--snapshot-kind=${ios ? 'app-aot-assembly' : 'app-aot-elf'}',
       '--${ios ? 'assembly' : 'elf'}=${output.path}/${ios ? 'snapshot.S' : 'libapp.so'}',
       '${release.path}/baseline.aot.dill',
