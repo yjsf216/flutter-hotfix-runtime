@@ -16,6 +16,9 @@ import subprocess
 import sys
 import zipfile
 
+from project_config import native_options, resolve_config
+import engine_bundle
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -150,8 +153,12 @@ def release(config_path, output, resume=False):
     project = (config_path.parent / config['project']).resolve()
     commit = head(project)
     require(config['platform'] == 'android', 'Android only')
-    flavor = config['androidFlavor']
-    require(re.fullmatch(r'[a-z][A-Za-z0-9]*', flavor) is not None, 'Explicit Android flavor required')
+    bundle = engine_bundle.from_project(project, 'android')
+    if bundle:
+        os.environ.update(bundle)
+    config = resolve_config(config, project)
+    flavor = native_options(config)['flavor']
+    require(re.fullmatch(r'(?:[a-z][A-Za-z0-9]*)?', flavor) is not None, 'Invalid Android flavor')
     defines = config.get('dartDefines', {})
     require(isinstance(defines, dict) and all(isinstance(k, str) and isinstance(v, str)
             and k and not k.startswith(('dart.', 'flutter.', 'HOTFIX_'))
@@ -172,17 +179,26 @@ def release(config_path, output, resume=False):
     require(version_line and version_line[1] == config['release'], 'Config release differs from pubspec')
     if not resume:
         output.mkdir(parents=True)
+    config = {**config, 'project': str(project)}
+    resolved_path = output / 'resolved-config.json'
+    if resume and resolved_path.exists():
+        require(read(resolved_path) == config, 'Resolved native build configuration changed')
+    elif not resume:
+        write(resolved_path, config)
+    # Legacy packaging retries used their original config path.
+    config_path = resolved_path if resolved_path.exists() else config_path
     env = {**os.environ, 'ORG_GRADLE_PROJECT_hotfixRuntime': 'true'}
     # Lock is scoped to this checkout. Other build entrypoints must not run concurrently.
     with open(project / '.git/hotfix-build.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if not resume:
             run([flutter / 'bin/flutter', 'build', 'apk', '--release', '--no-pub',
-                 '--target-platform', 'android-arm64', '--flavor', flavor,
+                 '--target-platform', 'android-arm64', *(['--flavor', flavor] if flavor else []),
                  '--build-name', version, '--build-number', code,
                  *['--dart-define=' + k + '=' + v for k, v in defines.items()]], project, env=env)
         require(head(project) == commit, 'Build changed tracked/untracked source')
-        native = project / f'build/app/outputs/flutter-apk/app-{flavor}-release.apk'
+        apk_name = f'app-{flavor}-release.apk' if flavor else 'app-release.apk'
+        native = project / 'build/app/outputs/flutter-apk' / apk_name
         original = output / 'native.apk'
         if not resume:
             shutil.copyfile(native, original)
@@ -200,7 +216,7 @@ def release(config_path, output, resume=False):
                 require(metadata.get(key) == value, 'Baseline configuration changed: ' + key)
         for relative, expected in metadata['sources'].items():
             require(digest(project / relative) == expected, 'Baseline source changed: ' + relative)
-        variant = flavor + 'Release'
+        variant = flavor + 'Release' if flavor else 'release'
         script = output / 'package.init.gradle'
         script.write_text(init_script())
         libs = {'libapp.so': digest(baseline / 'libapp.so'), 'libflutter.so': digest(engine)}
@@ -214,7 +230,7 @@ def release(config_path, output, resume=False):
                  '-PhotfixAot=' + str(baseline / 'libapp.so'), '-PhotfixEngine=' + str(engine),
                  '-Pdart-defines=' + ','.join(base64.b64encode((k + '=' + v).encode()).decode()
                                              for k, v in defines.items())], project, env=env)
-            packaged = project / f'build/app/outputs/apk/{flavor}/release/app-{flavor}-release.apk'
+            packaged = project / 'build/app/outputs/apk' / flavor / 'release' / apk_name
             apk = output / 'app.apk'
             shutil.copyfile(packaged, apk)
             verify_libs(apk, libs)
@@ -227,6 +243,8 @@ def release(config_path, output, resume=False):
                 'baselineId': read(baseline / 'release/release.json')['baselineId'],
                 'apkSha256': digest(apk), 'libraries': libs,
                 'flutterSdk': str(flutter), 'generatorSha256': digest(generator),
+                'engineBundle': ({'version': read(bundle['HOTFIX_ENGINE_MANIFEST'])['version'],
+                                  'manifestSha256': digest(bundle['HOTFIX_ENGINE_MANIFEST'])} if bundle else None),
                 'publicKeySha256': digest(Path(os.environ['HOTFIX_PUBLIC_KEY_FILE'])),
                 'config': config,
             })

@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import engine_bundle
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE_REVISION = '42d3d75a56efe1a2e9902f52dc8006099c45d937'
@@ -15,6 +16,25 @@ DART_REVISION = 'c70f78e7d682c158c15ca0c26c729b3ccb932284'
 PATH_OPTIONS = {'flutter_sdk': 'FLUTTER_SDK', 'android_sdk': 'ANDROID_SDK_ROOT',
                 'java_home': 'JAVA_HOME', 'dart_sdk_source': 'DART_SDK_SOURCE',
                 'gen_snapshot': 'GEN_SNAPSHOT'}
+
+
+def profile_directory(project, target=None):
+    root = Path(project) / '.hotfix'
+    target = target or os.environ.get('HOTFIX_ACTIVE_PLATFORM')
+    if target and target not in ('android', 'ios'):
+        raise ValueError('Unsupported platform')
+    if root.is_symlink():
+        raise ValueError('.hotfix cannot be a symlink')
+    profile = root / 'local.json'
+    if profile.is_symlink():
+        raise ValueError('Profile cannot be a symlink')
+    if target:
+        current = json.loads(profile.read_text()).get('platform', 'android') if profile.is_file() else 'android'
+        if current != target:
+            root = root / target
+    if root.is_symlink() or (root / 'local.json').is_symlink():
+        raise ValueError('Platform profile cannot be a symlink')
+    return root
 
 
 def command(args):
@@ -40,10 +60,17 @@ def discover(args, saved=None):
     if not values['JAVA_HOME'] and Path('/usr/libexec/java_home').is_file():
         values['JAVA_HOME'] = command(['/usr/libexec/java_home', '-v', '17'])
     values['DART_SDK_SOURCE'] = values['DART_SDK_SOURCE'] or str(ROOT / 'work/upstream/dart-sdk')
+    target = getattr(args, 'platform', None) or saved.get('HOTFIX_TARGET_PLATFORM', 'android')
+    bundle = None if getattr(args, 'gen_snapshot', None) else engine_bundle.from_project(
+        getattr(args, 'project', None) or Path.cwd(), target)
+    if bundle:
+        values.update(bundle)
     values['GEN_SNAPSHOT'] = values['GEN_SNAPSHOT'] or str(ROOT /
-        'work/upstream/flutter-engine-ddm/engine/src/out/hotfix_android_release_arm64/artifacts_arm64/gen_snapshot_arm64')
+        f'work/upstream/flutter-engine-ddm/engine/src/out/hotfix_{target}_release_arm64/artifacts_arm64/gen_snapshot_arm64')
     values = {k: str(Path(v).expanduser().resolve()) if v else '' for k, v in values.items()}
     values['DART_BIN'] = str(Path(values['FLUTTER_SDK']) / 'bin/cache/dart-sdk/bin/dart') if values['FLUTTER_SDK'] else ''
+    if target == 'ios':
+        values['HOTFIX_TARGET_PLATFORM'] = target
     builds = sorted((Path(values['ANDROID_SDK_ROOT']) / 'build-tools').glob('*'),
                     key=lambda p: [int(n) for n in re.findall(r'\d+', p.name)]) if values['ANDROID_SDK_ROOT'] else []
     selected = saved.get('ANDROID_BUILD_TOOLS') or os.environ.get('ANDROID_BUILD_TOOLS', '')
@@ -53,9 +80,17 @@ def discover(args, saved=None):
 
 
 def inspect(env):
+    ios = env.get('HOTFIX_TARGET_PLATFORM') == 'ios'
     checks = []
     def check(name, ok, detail, hint):
         checks.append({'name': name, 'ok': bool(ok), 'detail': detail, 'hint': '' if ok else hint})
+    if env.get('HOTFIX_ENGINE_MANIFEST'):
+        try:
+            bundle = engine_bundle.verify(env['HOTFIX_ENGINE_MANIFEST'], 'ios' if ios else 'android')
+            valid = Path(env.get('GEN_SNAPSHOT', '')).resolve() == Path(bundle['GEN_SNAPSHOT'])
+            check('engine-bundle', valid, env['HOTFIX_ENGINE_MANIFEST'], 'Engine/generator must match the verified bundle')
+        except (ValueError, OSError, KeyError) as error:
+            check('engine-bundle', False, str(error), 'Re-fetch the pinned runtime package; never bypass artifact verification')
     check('host', platform.system() == 'Darwin' and platform.machine() == 'arm64',
           platform.system() + '/' + platform.machine(), '当前完整安装引导验收环境为 macOS Apple Silicon。')
     check('python', sys.version_info >= (3, 10), platform.python_version(), '安装 Python 3.10 或更高版本。')
@@ -89,17 +124,24 @@ def inspect(env):
         'console-ui': (ROOT / 'console/static/index.html', False, '重新获取完整源码；仅前端维护者需在 console/web 执行 npm ci && npm run build。'),
     }
     for name, (path, executable, hint) in files.items():
+        if ios and name in ('aapt', 'apksigner', 'android-platform', 'android-ndk', 'cmake', 'ddm-engine'):
+            continue
         check(name, path.is_file() and (not executable or os.access(path, os.X_OK)), str(path), hint)
     java = Path(env.get('JAVA_HOME') or '/nonexistent-hotfix-jdk') / 'bin/java'
     java_version = command([java, '-version']) if java.is_file() else ''
-    check('jdk', bool(re.search(r'version "17[.\"]', java_version)), java_version.splitlines()[0] if java_version else str(java),
-          '安装 JDK 17 并设置 --java-home；其他 JDK 需自行确认与 App 的 AGP 兼容。')
+    if not ios:
+        check('jdk', bool(re.search(r'version "17[.\"]', java_version)), java_version.splitlines()[0] if java_version else str(java),
+              '安装 JDK 17 并设置 --java-home；其他 JDK 需自行确认与 App 的 AGP 兼容。')
+    else:
+        check('ios-engine', (build / 'Flutter.framework/Flutter').is_file(), str(build / 'Flutter.framework'), '按 engine/build_ios_ddm.sh 构建 iOS Release DDM Engine。')
+        check('xcode', command(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path']), 'iphoneos SDK', '安装并选择完整 Xcode。')
+        check('xcodeproj', command(['ruby', '-rxcodeproj', '-e', 'puts Xcodeproj::VERSION']), 'Ruby xcodeproj', '安装 xcodeproj Ruby gem，用于安全编辑 Runner 构建设置。')
     revision = command(['git', '-C', dart, 'rev-parse', 'HEAD']) if (dart / '.git').exists() else ''
     check('dart-revision', revision == DART_REVISION, revision or '未找到 Dart Git checkout',
           '使用固定 Dart 提交 ' + DART_REVISION + '；设置 --dart-sdk-source。')
     args = build / 'args.gn'
     text = args.read_text() if args.is_file() else ''
-    expected = {'target_os': '"android"', 'target_cpu': '"arm64"', 'flutter_runtime_mode': '"release"',
+    expected = {'target_os': '"ios"' if ios else '"android"', 'target_cpu': '"arm64"', 'flutter_runtime_mode': '"release"',
                 'dart_dynamic_modules': 'true', 'dart_version': '"' + DART_REVISION + '"'}
     correct = all(re.search(r'(?m)^' + key + r'\s*=\s*' + re.escape(value) + r'\s*$', text) for key, value in expected.items())
     check('ddm-configuration', correct, str(args), '需要 Android / arm64 / release / DDM=true 及固定 Dart 的 args.gn；普通 Flutter Engine 不适用。')
@@ -127,13 +169,14 @@ def bind_runtime_sdk(env):
 
 def main():
     parser = argparse.ArgumentParser(description='只读检查固定工具链，汇总缺项并给出安装步骤')
+    parser.add_argument('--platform', choices=['android', 'ios'])
     for option in PATH_OPTIONS:
         parser.add_argument('--' + option.replace('_', '-'))
     parser.add_argument('--project', type=Path, default=Path.cwd())
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--guide', action='store_true')
     args = parser.parse_args()
-    profile = args.project / '.hotfix/local.json'
+    profile = profile_directory(args.project, args.platform) / 'local.json'
     try:
         saved = json.loads(profile.read_text()).get('environment', {}) if profile.is_file() else {}
         env = discover(args, saved)
@@ -154,7 +197,7 @@ def main():
         print('安装指南：' + report['guide'])
         if args.guide:
             print('顺序：基础工具 → Flutter 3.41.9 → Android SDK/JDK → 固定 Dart 源码 → 定制 DDM Engine → doctor → init → console。')
-            print('本命令不安装软件、不接受 SDK 许可、不修改项目；定制 Engine 暂无预编译下载包。')
+            print('本命令不安装软件、不接受 SDK 许可、不修改项目；patch_runtime 0.2.0 起可从 Pub 解析目录使用配套 Engine。')
     return 0 if ready else 1
 
 

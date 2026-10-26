@@ -17,6 +17,8 @@ from urllib.parse import urlsplit
 
 from android_release import ROOT, digest, head, read, require, run
 import toolchain
+import engine_bundle
+from project_config import native_options
 
 ENTRY = '''import 'dart:io';
 import 'package:flutter/widgets.dart';
@@ -24,12 +26,16 @@ import 'package:patch_ir_spike/dbc3_dispatch.dart';
 import 'main.dart' as app;
 
 Future<void> main(List<String> args) async {
-  if (!Platform.isAndroid || args.length != 3) {
-    throw StateError('Android hotfix host requires three private paths');
+  if ((!Platform.isAndroid && !Platform.isIOS) || args.length != 3) {
+    throw StateError('Mobile hotfix host requires three private paths');
   }
   final binding = WidgetsFlutterBinding.ensureInitialized();
+  // Async module loading must not let an empty frame satisfy startup health.
+  binding.deferFirstFrame();
   final patch = await bootSignedModule(args);
   await Future<void>.sync(app.main);
+  await binding.endOfFrame;
+  binding.allowFirstFrame();
   await binding.waitUntilFirstFrameRasterized;
   // Replace this minimal checkpoint with the app's real startup validation.
   if (patch != null && !commitModuleHealth(patch)) {
@@ -94,8 +100,8 @@ def local_http(origin, allow_lan=False):
     require(isinstance(origin, str) and origin == origin.strip() and not any(ord(c) < 32 for c in origin), '无效服务地址')
     url = urlsplit(origin)
     require(url.hostname and '@' not in url.netloc and
-            url.path in ('', '/') and not url.query and not url.fragment,
-            '更新地址必须是没有路径、认证信息或查询参数的 origin')
+            re.fullmatch(r'(?:/[A-Za-z0-9_-]+)*/?', url.path) is not None and not url.query and not url.fragment,
+            '更新地址只能包含固定路径，不允许认证信息、转义或查询参数')
     lan = False
     if allow_lan is True:
         try:
@@ -116,9 +122,14 @@ def tools_environment(args, previous):
     labels = {'flutter_sdk': 'Flutter 3.41.9 SDK 路径', 'android_sdk': 'Android SDK 路径',
               'java_home': 'JDK 17 路径', 'dart_sdk_source': '固定 Dart 源码路径',
               'gen_snapshot': '定制 Android gen_snapshot 路径'}
+    ios = getattr(args, 'platform', None) == 'ios' or saved.get('HOTFIX_TARGET_PLATFORM') == 'ios'
+    if ios:
+        labels.pop('android_sdk')
+        labels.pop('java_home')
+        labels['gen_snapshot'] = '定制 iOS gen_snapshot 路径'
     selected = {name: getattr(args, name, None) or ask(label, defaults[toolchain.PATH_OPTIONS[name]])
                 for name, label in labels.items()}
-    result = toolchain.discover(argparse.Namespace(**selected), saved)
+    result = toolchain.discover(argparse.Namespace(**selected, platform='ios' if ios else 'android'), saved)
     validate_tools(result)
     return result
 
@@ -133,12 +144,17 @@ def tool_stamp():
     # Freeze executable tooling/runtime sources. Regression checks do not enter
     # the release or patch, so editing a test must not invalidate an App baseline.
     files = [ROOT / 'tool/hotfix', ROOT / 'native/CMakeLists.txt', ROOT / 'spikes/patch_ir_spike/pubspec.yaml']
-    files += [p for p in (ROOT / 'tool').glob('*.py') if not p.name.endswith('_check.py')]
+    files += [p for p in (ROOT / 'tool').glob('*.py') if not p.name.endswith('_check.py')
+              and p.name not in ('upload_patch.py', 'upload_baseline.py')]
     files += [p for p in (ROOT / 'tool').glob('*.dart') if not p.name.endswith('_check.dart')]
+    files += list((ROOT / 'tool').glob('*.rb'))
     files += list((ROOT / 'spikes/patch_ir_spike/lib').rglob('*.dart'))
     # signature_check.dart is the production signer despite its historical name.
+    # Hosting/upload changes cannot alter a compiled baseline. Keep the compiler,
+    # signer and client runtime frozen without coupling them to server deployment.
     files += [p for p in (ROOT / 'spikes/patch_ir_spike/tool').glob('*.dart')
-              if not p.name.endswith('_check.dart') or p.name == 'signature_check.dart']
+              if (not p.name.endswith('_check.dart') or p.name == 'signature_check.dart')
+              and p.name not in ('delivery_server.dart', 'oss_artifact_store.dart')]
     files += list((ROOT / 'native').glob('*.c')) + list((ROOT / 'native').glob('*.h'))
     return hashlib.sha256(json.dumps({str(p.relative_to(ROOT)): digest(p) for p in sorted(files)}, sort_keys=True).encode()).hexdigest()
 
@@ -159,8 +175,9 @@ def integration_plan(project, info, origin, allow_lan=False, dart_source=None):
         require(not allow_lan or config.get('allowDevelopmentLan') is True,
                 '已有配置请先显式设置 allowDevelopmentLan=true，并修改测试网络白名单；不会自动覆盖')
         local_http(config.get('updateOrigin', ''), config.get('allowDevelopmentLan') is True)
-        require(isinstance(config.get('androidFlavor'), str) and re.fullmatch(r'[a-z][A-Za-z0-9]*', config['androidFlavor']),
-                '已有配置需要明确的 androidFlavor，请按手动教程补齐')
+        flavor = native_options(config).get('flavor')
+        require(flavor is None or isinstance(flavor, str) and re.fullmatch(r'(?:[a-z][A-Za-z0-9]*)?', flavor),
+                'native.flavor 格式无效；不填时从构建参数自动确定')
         require(isinstance(config.get('entry'), str) and bool(config['entry']), '已有配置缺少 entry')
         entry = Path(config['entry'])
         require(bool(entry.parts) and entry.parts[0] == 'lib' and '..' not in entry.parts and (project / entry).is_file(), '已有定制入口不存在')
@@ -218,7 +235,7 @@ android {{
     if 'android.permission.INTERNET' not in manifest_text:
         manifest_text = re.sub(r'(<manifest\b[^>]*>)', r'\1\n    <uses-permission android:name="android.permission.INTERNET" />', manifest_text, count=1)
     config = {'project': '.', 'entry': 'lib/main_hotfix.dart', 'patchScope': 'lib', 'platform': 'android',
-              'appId': app_ids[0], 'androidFlavor': 'hotfix', 'dartDefines': {},
+              'dartDefines': {},
               'updateOrigin': origin, 'allowDevelopmentHttp': development,
               **({'allowDevelopmentLan': True} if allow_lan and development else {})}
     plan = {pubspec: spec, activity: re.sub(pattern, 'class MainActivity : FlutterActivity()' + ARGS_METHOD, activity_text),
@@ -239,7 +256,7 @@ android {{
 
 
 def initialize(project, args):
-    local = project / '.hotfix'
+    local = toolchain.profile_directory(project, getattr(args, 'platform', None))
     profile_file = local / 'local.json'
     require(not profile_file.is_symlink(), '本地配置不能是软链接')
     require(not local.exists() or profile_file.is_file(), '已有 .hotfix 目录不是本入口管理的配置，拒绝覆盖')
@@ -247,11 +264,19 @@ def initialize(project, args):
     if previous:
         require(previous.get('schemaVersion') == 1 and previous.get('project') == str(project),
                 '本地配置不属于当前路径；请恢复原工程路径或在新目录重新接入，归档不会自动迁移')
+        require(not getattr(args, 'platform', None) or args.platform == previous.get('platform', 'android'),
+                '同一 .hotfix 不切换平台；请为另一平台使用独立工程副本')
     env = tools_environment(args, previous)
     info = app_info(project, env)
     require(isinstance(info['version'], str) and re.fullmatch(r'[0-9A-Za-z.+_-]+', info['version']), 'pubspec.yaml 必须有明确的 version')
-    plan, config = integration_plan(project, info, args.origin, getattr(args, 'dev_lan', False),
-                                    env.get('DART_SDK_SOURCE'))
+    platform = getattr(args, 'platform', None) or previous.get('platform', 'android')
+    if platform == 'ios':
+        import ios_integration
+        plan, config = ios_integration.plan(project, info, args.origin, getattr(args, 'dev_lan', False),
+                                            env['DART_SDK_SOURCE'], getattr(args, 'ios_team', None), ENTRY, local_http)
+    else:
+        plan, config = integration_plan(project, info, args.origin, getattr(args, 'dev_lan', False),
+                                        env.get('DART_SDK_SOURCE'))
     key_default = previous.get('keys') or (str(Path(os.environ['HOTFIX_PUBLIC_KEY_FILE']).parent)
         if os.environ.get('HOTFIX_PUBLIC_KEY_FILE') else str(local / 'keys'))
     keys = Path(args.keys or ask('补丁密钥目录（不存在时生成测试密钥）', key_default)).expanduser().resolve()
@@ -281,7 +306,7 @@ def initialize(project, args):
         hidden_keys = subprocess.run(['git', 'check-ignore', '-q', '--no-index', '--', relative + '/.secret-probe'], cwd=project)
         tracked_key = run(['git', 'ls-files', '--', relative + '/private.pem'], project, True)
         require(hidden_keys.returncode == 0 and not tracked_key.strip(), 'App 内密钥目录必须整体忽略且私钥不能已被跟踪；建议使用仓库外目录')
-    local.mkdir(exist_ok=True, mode=0o700)
+    local.mkdir(parents=True, exist_ok=True, mode=0o700)
     toolchain.bind_runtime_sdk(env)
     if plan:
         backup = local / 'backups' / secrets.token_hex(6)
@@ -297,11 +322,13 @@ def initialize(project, args):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(contents)
     env['HOTFIX_PUBLIC_KEY_FILE'] = str(keys / 'public-key.txt')
-    profile = {'schemaVersion': 1, 'project': str(project), 'keys': str(keys), 'environment': env, 'ready': False}
+    profile = {'schemaVersion': 1, 'project': str(project), 'platform': platform, 'keys': str(keys), 'environment': env, 'ready': False}
     save(profile_file, profile)
     launcher = local / 'run'
     require(not launcher.is_symlink(), '本地入口不能是软链接')
-    launcher.write_text('#!/bin/sh\nset -eu\ncd -- "$(dirname -- "$0")/.."\nexec python3 -B ' + shlex.quote(str(ROOT / 'tool/app_cli.py')) + ' "$@"\n')
+    selected = ('export HOTFIX_ACTIVE_PLATFORM=' + platform + '\n') if local != project / '.hotfix' else ''
+    launcher.write_text('#!/bin/sh\nset -eu\n' + selected + 'cd -- "$(dirname -- "$0")/' +
+                       os.path.relpath(project, local) + '"\nexec python3 -B ' + shlex.quote(str(ROOT / 'tool/app_cli.py')) + ' "$@"\n')
     launcher.chmod(0o700)
     environment = {**os.environ, **env}
     run([env['DART_BIN'], 'pub', 'get'], ROOT / 'spikes/patch_ir_spike', env=environment)
@@ -312,7 +339,7 @@ def initialize(project, args):
     run([Path(env['FLUTTER_SDK']) / 'bin/flutter', 'pub', 'get'], project, env=environment)
     profile['ready'] = True
     save(profile_file, profile)
-    print('初始化完成。审查、测试并提交接入改动后，运行 ./.hotfix/run console --with-delivery。')
+    print(f'初始化完成。审查、测试并提交接入改动后，运行 ./{launcher.relative_to(project)} console --with-delivery。')
     print('也可使用命令行：./.hotfix/run doctor | build | patch | publish | serve | status')
     print('首次使用仍需验收启动与业务健康检查；不会自动安装 App 或发布补丁。')
 
@@ -324,24 +351,41 @@ def invoke(profile, *args, extra=None):
 def baseline_for(project, state):
     require(state.get('baseline'), '尚无成功基线，请先 build；已有低层归档可继续使用 release-android/patch-android')
     base = Path(state['baseline'])
-    receipt = read(base / 'android-release.json')
+    receipt = archive_receipt(base)
     metadata = read(base / 'baseline/project.json')
     require(Path(metadata['project']).resolve() == project and receipt['baselineId'] ==
             read(base / 'baseline/release/release.json')['baselineId'], '基线不属于当前工程')
     return base, receipt
 
 
+def target_platform(profile):
+    platform = profile.get('platform', 'android')
+    require(platform in ('android', 'ios'), '不支持的平台')
+    return platform
+
+
+def archive_receipt(base):
+    markers = [base / (platform + '-release.json') for platform in ('android', 'ios')]
+    found = [path for path in markers if path.is_file()]
+    require(len(found) == 1, '需要完整且唯一的 Android/iOS 发行归档')
+    return read(found[0])
+
+
 def perform(project, action, yes=False):
-    local = project / '.hotfix'
+    local = toolchain.profile_directory(project)
     profile = read(local / 'local.json')
     require(profile.get('schemaVersion') == 1 and profile.get('ready') and profile.get('project') == str(project),
             '本地配置未完成或工程已移动，请重新 init')
     state_file = local / 'state.json'
     state = read(state_file) if state_file.exists() else {}
+    platform = target_platform(profile)
     if action == 'status':
         print(json.dumps({'baseline': state.get('baseline'), 'patch': state.get('patch')}, indent=2))
         return
     if action in ('build', 'patch'):
+        bundle = engine_bundle.from_project(project, platform)
+        if bundle:
+            profile = {**profile, 'environment': {**profile['environment'], **bundle}}
         # Clear implicit publication selection before a new attempt, including
         # preflight failures, so a failed build cannot publish yesterday's patch.
         state.pop('patch', None)
@@ -353,24 +397,25 @@ def perform(project, action, yes=False):
         require(isinstance(info['version'], str) and re.fullmatch(r'[0-9A-Za-z.+_-]+', info['version']), '无效 App 版本')
         suffix = commit[:12] + '-' + secrets.token_hex(4)
         if action == 'build':
-            config = read(project / 'hotfix.android.json')
+            config = read(project / f'hotfix.{platform}.json')
             config.update(project=str(project), release=info['version'])
             generated = local / 'configs' / (suffix + '.json')
             save(generated, config)
             output = local / 'releases' / (info['version'] + '-' + suffix)
-            invoke(profile, 'release-android', generated, output)
-            require((output / 'android-release.json').is_file(), '构建未产生完成标志')
+            invoke(profile, 'release-' + platform, generated, output)
+            require((output / (platform + '-release.json')).is_file(), '构建未产生完成标志')
             require(tool_stamp() == stamp, '工具源码在构建期间发生变化，请使用新的输出重试')
             state['baseline'] = str(output)
             state['toolStamp'] = stamp
             save(state_file, state)
-            print('版本构建完成；安装包:', output / 'app.apk')
+            print('版本构建完成；安装包:', output / ('app.ipa' if platform == 'ios' else 'app.apk'))
         else:
             base, receipt = baseline_for(project, state)
             require(state.get('toolStamp') == stamp, '工具/运行时源码与基线构建时不同，请恢复原工具版本或构建新基线')
             require(receipt['release'] == info['version'], '当前 App 版本与上次基线不同；请切回对应修复分支或 build 新基线')
             output = local / 'patches' / suffix
-            invoke(profile, 'patch-android', base, 'HEAD', output, profile['keys'], 'patch-' + suffix)
+            require(read(base / 'baseline/project.json').get('platform', 'android') == platform, '基线平台与当前配置不一致')
+            invoke(profile, 'patch-' + platform, base, 'HEAD', output, profile['keys'], 'patch-' + suffix)
             require(tool_stamp() == stamp, '工具源码在补丁构建期间发生变化，不选择该产物发布')
             manifest = read(output / 'manifest.json')['manifest']
             require(manifest['baselineId'] == receipt['baselineId'], '补丁基线不匹配')
@@ -382,7 +427,7 @@ def perform(project, action, yes=False):
             print('在测试环境验收后，运行 ./.hotfix/run publish。')
         return
     if action == 'serve':
-        config = read(project / 'hotfix.android.json')
+        config = read(project / f'hotfix.{platform}.json')
         require(local_http(config['updateOrigin'], config.get('allowDevelopmentLan') is True),
                 'serve 只启动显式开发 HTTP 测试服务；HTTPS 请按 delivery/README.md 部署')
         token_file = local / 'publish-token'
@@ -434,18 +479,22 @@ def main():
         os.execv(sys.executable, [sys.executable, '-B', str(script), *sys.argv[2:]])
     parser = argparse.ArgumentParser(description='在 App 根目录使用的简化入口，不自动提交/安装/推送')
     parser.add_argument('action', choices=['init', 'build', 'patch', 'publish', 'serve', 'status'])
+    parser.add_argument('--platform', choices=['android', 'ios'])
+    parser.add_argument('--ios-team', help='Apple Developer Team ID（仅 iOS init）')
     for name in ['flutter-sdk', 'android-sdk', 'java-home', 'dart-sdk-source', 'gen-snapshot', 'keys', 'origin']:
         parser.add_argument('--' + name)
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--dev-lan', action='store_true', help='显式允许私有 IPv4 的局域网 HTTP 测试，不用于生产')
     parser.add_argument('--yes', action='store_true')
     args = parser.parse_args()
-    if args.action != 'init' and (args.dry_run or args.dev_lan or any([args.flutter_sdk, args.android_sdk, args.java_home,
+    if args.action != 'init' and (args.dry_run or args.dev_lan or args.ios_team or any([args.flutter_sdk, args.android_sdk, args.java_home,
                                                                    args.dart_sdk_source, args.gen_snapshot, args.keys, args.origin])):
         parser.error('路径、origin 和 --dry-run 参数只适用于 init')
     if args.yes and args.action != 'publish':
         parser.error('--yes 只适用于 publish')
     project = project_root()
+    if args.platform:
+        os.environ['HOTFIX_ACTIVE_PLATFORM'] = args.platform
     with open(project / '.git/hotfix-simple.lock', 'a') as lock:
         # Server deliberately holds no build lock; it runs alongside patching.
         if args.action not in ('serve', 'status'):

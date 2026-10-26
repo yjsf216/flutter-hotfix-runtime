@@ -27,9 +27,24 @@ class AppCliCheck(unittest.TestCase):
                 original = app.tool_stamp()
                 checks.write_text('test v2')
                 self.assertEqual(app.tool_stamp(), original)
+                (checks.parent / 'delivery_server.dart').write_text('server-only change')
+                (checks.parent / 'oss_artifact_store.dart').write_text('storage-only change')
+                ci = root / 'ci/retention_client.py'
+                ci.parent.mkdir()
+                ci.write_text('CI orchestration only')
+                policy = root / 'delivery/hosted/retention_policy.dart'
+                policy.parent.mkdir(parents=True)
+                policy.write_text('server retention only')
+                self.assertEqual(app.tool_stamp(), original)
                 signer.write_text('signer v2')
                 self.assertNotEqual(app.tool_stamp(), original)
                 signer.write_text('signer v1')
+                ruby = root / 'tool/ios_integrate.rb'
+                ruby.parent.mkdir(parents=True)
+                ruby.write_text('integration v1')
+                with_ruby = app.tool_stamp()
+                ruby.write_text('integration v2')
+                self.assertNotEqual(app.tool_stamp(), with_ruby)
                 runtime.write_text('updated runtime')
                 self.assertNotEqual(app.tool_stamp(), original)
 
@@ -60,8 +75,13 @@ class AppCliCheck(unittest.TestCase):
         plan, config = app.integration_plan(self.root, self.info, 'http://127.0.0.1:18091')
         self.assertEqual(self.activity.read_text(), original)
         self.assertIn('getDartEntrypointArgs', plan[self.activity])
+        entry = plan[self.root / 'lib/main_hotfix.dart']
+        self.assertLess(entry.index('deferFirstFrame'), entry.index('bootSignedModule'))
+        self.assertLess(entry.index('endOfFrame'), entry.index('allowFirstFrame'))
+        self.assertLess(entry.index('waitUntilFirstFrameRasterized'), entry.index('commitModuleHealth'))
         self.assertIn('apply(from', plan[self.gradle])
-        self.assertEqual(config['appId'], 'com.example.demo')
+        self.assertNotIn('appId', config)  # Read the selected native variant at build time.
+        self.assertNotIn('native', config)
         self.assertNotIn('release', config)  # pubspec remains the version authority.
         self.assertIn('includeSubdomains="false"', app.NETWORK)
         self.activity.write_text(original.replace('FlutterActivity()', 'FlutterActivity() { fun custom() {} }'))
@@ -104,9 +124,11 @@ class AppCliCheck(unittest.TestCase):
         self.assertFalse((self.root / '.hotfix').exists())
 
     def test_origin_guards(self):
-        for origin in ['http://remote.example', 'https://user:secret@example.com', 'https://example.com/api', 'https://example.com?q=x']:
+        for origin in ['http://remote.example', 'https://user:secret@example.com', 'https://example.com/a%20b', 'https://example.com?q=x']:
             with self.assertRaises(ValueError):
                 app.local_http(origin)
+        self.assertFalse(app.local_http('https://example.com/public/hotfix-test'))
+        self.assertFalse(app.local_http('https://example.com/public/hotfix-test/'))
 
     def test_lan_requires_explicit_private_ipv4_and_exact_whitelist(self):
         origin = 'http://192.168.111.53:18091'
@@ -155,6 +177,41 @@ class AppCliCheck(unittest.TestCase):
         self.assertFalse(plan)
         with self.assertRaises(ValueError):
             app.integration_plan(self.root, self.info, 'https://another.example')
+
+    def test_ios_profile_dispatches_without_android_tools_or_config(self):
+        args = argparse.Namespace(platform='ios', flutter_sdk='/tools/flutter', dart_sdk_source='/tools/dart',
+                                  gen_snapshot='/tools/ios/generator')
+        with patch.object(app, 'validate_tools'):
+            env = app.tools_environment(args, {})
+        self.assertEqual(env['HOTFIX_TARGET_PLATFORM'], 'ios')
+        self.assertEqual(env['GEN_SNAPSHOT'], '/tools/ios/generator')
+        self.put('.hotfix/local.json', json.dumps({'schemaVersion': 1, 'ready': True, 'platform': 'ios',
+                 'project': str(self.root), 'environment': {'HOTFIX_PUBLIC_KEY_FILE': '/test/public-key.txt'}}))
+        self.put('hotfix.ios.json', json.dumps({'updateOrigin': 'http://192.168.111.53:18095', 'allowDevelopmentLan': True}))
+        with patch.object(app, 'invoke') as invoke:
+            app.perform(self.root, 'serve')
+        self.assertEqual(invoke.call_args.kwargs['extra']['HOTFIX_BIND'], '192.168.111.53')
+
+    def test_ios_profile_does_not_replace_android_state_or_token(self):
+        android = {'schemaVersion': 1, 'ready': True, 'project': str(self.root), 'environment': {}}
+        self.put('.hotfix/local.json', json.dumps(android))
+        token = self.put('.hotfix/publish-token', 'a' * 32)
+        ios = {**android, 'platform': 'ios', 'environment': {'HOTFIX_PUBLIC_KEY_FILE': '/test/ios-key.txt'}}
+        self.put('.hotfix/ios/local.json', json.dumps(ios))
+        self.put('hotfix.ios.json', json.dumps({'updateOrigin': 'http://192.168.1.100:18097', 'allowDevelopmentLan': True}))
+        with patch.dict(os.environ, {'HOTFIX_ACTIVE_PLATFORM': 'ios'}), patch.object(app, 'invoke') as invoke:
+            app.perform(self.root, 'serve')
+            self.assertEqual(app.toolchain.profile_directory(self.root), self.root / '.hotfix/ios')
+        self.assertEqual(invoke.call_args.args[2], self.root / '.hotfix/ios/server')
+        self.assertEqual(app.read(self.root / '.hotfix/local.json'), android)
+        self.assertEqual(token.read_text(), 'a' * 32)
+        self.assertTrue((self.root / '.hotfix/ios/publish-token').exists())
+
+    def test_ambiguous_archive_refused(self):
+        self.put('archive/android-release.json', '{}')
+        self.put('archive/ios-release.json', '{}')
+        with self.assertRaisesRegex(ValueError, '唯一'):
+            app.archive_receipt(self.root / 'archive')
 
     def test_build_patch_publish_and_fail_closed(self):
         local = self.root / '.hotfix'

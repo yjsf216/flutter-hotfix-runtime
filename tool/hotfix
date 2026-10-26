@@ -14,20 +14,25 @@ case "${1:-}" in
     exec python3 -B "$root/tool/app_cli.py" "$@"
     ;;
   patch|publish|serve)
-    if [ "$#" -eq 1 ] || { [ "$1" = publish ] && [ "${2:-}" = --yes ]; }; then
-      exec python3 -B "$root/tool/app_cli.py" "$@"
-    fi
+    case "${2:-}" in
+      ''|--*) exec python3 -B "$root/tool/app_cli.py" "$@" ;;
+    esac
     ;;
   --help)
     printf '%s\n' 'Start here: hotfix doctor --guide | hotfix init | hotfix console --with-delivery'
     printf '%s\n' 'Local management UI: hotfix console [--project APP_ROOT] [--port 8765] [--with-delivery]'
     printf '%s\n' 'App shortcuts: hotfix init | build | patch | publish [--yes] | serve | status'
     printf '%s\n' 'hotfix release-android CONFIG OUTPUT [--resume-packaging]' 'hotfix patch-android ARCHIVE REF OUTPUT KEY_DIR PATCH_ID'
+    printf '%s\n' 'iOS: hotfix init --platform ios --ios-team TEAM_ID (see IOS_GETTING_STARTED.md)'
+    printf '%s\n' 'hotfix release-ios CONFIG OUTPUT' 'hotfix patch-ios ARCHIVE REF OUTPUT KEY_DIR PATCH_ID'
     printf '%s\n' 'Advanced: release | release-git | patch-git | sign | policy | pause | stats'
     exit 0
     ;;
   release-android|patch-android)
     exec python3 "$root/tool/android_release.py" "$@"
+    ;;
+  release-ios|patch-ios)
+    exec python3 -B "$root/tool/ios_release.py" "$@"
     ;;
 esac
 sdk=${DART_SDK_SOURCE:-"$root/work/upstream/dart-sdk"}
