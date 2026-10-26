@@ -1,4 +1,5 @@
 import argparse
+from contextlib import ExitStack
 from pathlib import Path
 import subprocess
 import tempfile
@@ -9,6 +10,29 @@ import jenkins_entry as runner
 
 
 class RunnerCheck(unittest.TestCase):
+    def test_completed_archive_retry_uploads_without_recompiling(self):
+        with tempfile.TemporaryDirectory() as temp, ExitStack() as stack:
+            root=Path(temp);project=root/'project';archive=root/'archive'
+            origin='https://updates.example.com';sha='a'*40
+            runner.save(project/'hotfix.android.json',{'updateOrigin':origin,'patchNumberingOrigin':origin})
+            runner.save(root/'ci-build.json',{'toolStamp':'same','sourceCommit':sha})
+            runner.save(archive/'android-release.json',{'gitCommit':sha,'publicKeySha256':'key',
+                'baselineId':'b'*64,'release':'1.0.0+1'})
+            runner.save(archive/'baseline/project.json',{'dartDefines':{'APP_CHANNEL':'test'}})
+            catalogue=unittest.mock.Mock();catalogue.owned.return_value=root
+            args=argparse.Namespace(resume_directory=root,platform='android',branch='test')
+            config={'environment':{'FLUTTER_SDK':'/unused'},'dataRoot':str(root),
+                    'origin':origin,'keys':str(root/'keys')}
+            for name,value in {'head':sha,'run':'','source_directory':None,'environment':{},
+                               'app_info':{'version':'1.0.0+1'},'tool_stamp':'same','digest':'key'}.items():
+                stack.enter_context(patch.object(runner,name,return_value=value))
+            compile_call=stack.enter_context(patch.object(runner,'cli',side_effect=AssertionError('recompiled')))
+            upload=stack.enter_context(patch.object(runner.upload_baseline,'upload'))
+            stack.enter_context(patch.object(runner,'Client'))
+            result=runner.baseline(args,config,catalogue,project,sha)
+            compile_call.assert_not_called();upload.assert_called_once()
+            self.assertEqual(result['baselineId'],'b'*64)
+
     def test_cache_cleanup_keeps_archive_and_refuses_symlinks(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);project=root/'project';project.mkdir()

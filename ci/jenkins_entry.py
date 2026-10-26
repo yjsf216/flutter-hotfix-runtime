@@ -85,6 +85,9 @@ def environment(config, project, platform):
     # Release Gradle's heap before the separate AOT compiler runs on small nodes.
     env['GRADLE_OPTS'] = env.get('GRADLE_OPTS', '') + ' -Dorg.gradle.daemon=false'
     env['HOTFIX_AOT_HEAP_MB'] = str(config.get('aotHeapMB', 3072))
+    if config.get('caBundle'):
+        require(Path(config['caBundle']).is_file(), 'CA bundle missing')
+        env['SSL_CERT_FILE'] = config['caBundle']
     env['HOTFIX_UPLOAD_TOKEN'] = Path(config['uploadTokenFile']).read_text().strip()
     env['HOTFIX_PUBLIC_KEY_FILE'] = str(Path(config['keys']) / 'public-key.txt')
     env['HOTFIX_MANIFEST_TTL_SECONDS'] = str(config.get('manifestTTLSeconds', 604800))
@@ -132,7 +135,11 @@ def baseline(args, config, catalogue, source, ref):
     archive = directory / 'archive'
     os.environ.update(env)
     stamp = tool_stamp()
-    if getattr(args, 'resume_directory', None):
+    completed = archive / (args.platform + '-release.json')
+    if getattr(args, 'resume_directory', None) and completed.is_file():
+        previous = read(directory / 'ci-build.json')
+        require(previous == {'toolStamp': stamp, 'sourceCommit': ref}, 'Completed archive tools or source differ')
+    elif getattr(args, 'resume_directory', None):
         require(args.platform == 'android', 'Only Android packaging supports resume')
         cli('release-android', generated, archive, '--resume-packaging')
     else:
@@ -140,6 +147,7 @@ def baseline(args, config, catalogue, source, ref):
     require(tool_stamp() == stamp, 'Build tools changed during baseline compilation')
     receipt = read(archive / (args.platform + '-release.json'))
     require(receipt['gitCommit'] == ref, 'Baseline commit mismatch')
+    require(digest(Path(config['keys']) / 'public-key.txt') == receipt['publicKeySha256'], 'Signing key differs from archive')
     save(directory / 'ci-build.json', {'toolStamp': stamp, 'sourceCommit': ref})
     upload_baseline.upload(config['origin'], archive, args.branch, ref)
     frozen = read(archive / 'baseline/project.json')
@@ -151,7 +159,10 @@ def baseline(args, config, catalogue, source, ref):
     # Dedicated tags expose baseline choices through Jenkins's existing Git
     # Parameter plugin. They never alter App branches or ordinary release tags.
     tag = 'hotfix-base-' + args.platform + '-' + re.sub(r'[^A-Za-z0-9_.-]', '_', channel) + '-' + receipt['release'].replace('+', '_') + '-' + receipt['baselineId']
-    run(['git', 'tag', tag, ref], project)
+    if run(['git', 'tag', '--list', tag], project, True).strip():
+        require(run(['git', 'rev-parse', 'refs/tags/' + tag], project, True).strip() == ref, 'Baseline tag differs')
+    else:
+        run(['git', 'tag', tag, ref], project)
     run(['git', 'push', 'origin', 'refs/tags/' + tag], project)
     trim_build_cache(project)
     return {'kind': 'baseline', 'baselineId': receipt['baselineId'], 'release': receipt['release'],
