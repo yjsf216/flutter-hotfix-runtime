@@ -1,4 +1,8 @@
-# 独立热更新管理后台（Android 本机 MVP）
+# 独立热更新管理后台（Android / iOS 本机 MVP）
+
+本机制作、服务端上传对象存储并管理发布的测试模式，见
+[服务端管理部署](../delivery/hosted/README.md)。独立页面为 `hosted.html`；
+已完成真实测试服务器、对象存储与 CDN 的 API 验收，手机公网基线另行验证。
 
 不需要 Jenkins、数据库、云账号或前端开发环境。自带 Vue 3 预构建页面，
 以简洁的左侧菜单、顶部导航、表格和确认弹窗组织操作。
@@ -30,7 +34,8 @@ Python 3.10+、Git、已完成初始化的 App 和对应工具链是必需的。
 ### 发布完整 App
 
 在原工程正常开发、测试、提交，打开“基础版本”，选择发行提交，点击“构建基础版本”。
-后台生成并验证 APK，保存完整基线。下载 APK 后自行通过原有渠道分发。
+后台生成并验证 APK / 开发签名 IPA，保存完整基线。下载后自行安装或按合适渠道分发。
+iOS 的工具链、签名、授权设备和安装方式见 [iOS 指南](../IOS_GETTING_STARTED.md)。
 它不会自动安装设备、推送代码或发布安装包。
 
 基线不是任意 Git 提交。只有后台成功构建并归档的版本才能在列表中选择。
@@ -88,7 +93,8 @@ Python 3.10+、Git、已完成初始化的 App 和对应工具链是必需的。
 内置执行器一次只运行一个任务，构建通过独立子进程执行；任务状态持久化。
 后台重启后把未完成任务标记为中断，不自动恢复或发布；已完成的归档仍保留。
 Ctrl+C 会停止本后台启动的构建进程组，以及 `--with-delivery` 启动的服务，不停止外部服务。
-日志最多保留前 8 MiB，页面显示最近 256 KiB；任务历史限 1000 条，达到后需备份迁移。
+日志保留前 4 MiB 和后 4 MiB，中间截断会标记；页面显示最近 256 KiB。
+任务历史限 1000 条，达到后需备份迁移。
 
 ## 管理 API
 
@@ -102,6 +108,7 @@ POST 必须是 `Content-Type: application/json`，正文上限 4 KiB。
 | `POST /api/tasks` | 提交串行任务，成功返回 202 和任务 ID |
 | `GET /api/log/<taskId>` | 读取该任务日志尾部 |
 | `GET /api/apk/<baselineRecordId>` | 哈希校验后下载归档 APK |
+| `GET /api/package/<baselineRecordId>` | 哈希校验后下载对应平台 APK / IPA |
 | `GET /api/stats/<baselineRecordId>` | 使用服务端发布凭据查询并筛选对应基线的报告事件 |
 
 任务 JSON：
@@ -116,7 +123,7 @@ POST 必须是 `Content-Type: application/json`，正文上限 4 KiB。
 
 这里的记录 ID 来自 `/api/state`，不是 App 使用的 SHA256 baselineId。
 管理 API 与 [App 分发 API](../delivery/README.md)是两套接口。
-此版本支持任意已接入的 Android 工程，但每个实例只管理一个工程；多个工程使用不同端口。
+此版本管理已接入的 Android / 标准 iOS Runner 工程；每个实例只管理一个工程和平台，多个实例使用不同端口。
 Jenkins 不参与默认路径，也没有作为必装依赖。
 
 ## 安全边界
@@ -131,10 +138,31 @@ Jenkins 不参与默认路径，也没有作为必装依赖。
 
 ## 开发与验证
 
+### iOS 统一入口验收（2026-10-14）
+
+iOS 平台分支已接入 `doctor/init/build/patch/publish/serve/status` 和管理 API。
+标准 Swift Runner 的原生构建、冻结多文件基线、匹配 AOT/Engine 替换、Apple
+开发签名、IPA 完整性校验，以及后台 Git 补丁编译/签名/发布/撤回已实际执行通过。
+生成输入按选定基线恢复；管理页面可下载对应平台安装包。
+
+真实业务工程已在 iOS 18.7.2 真机完成以下有限验收，不再只依赖独立 Demo：
+
+- 管理 API 选择基线 Git 提交，完成开发签名 IPA 归档与完整性校验；覆盖安装一次基线，未卸载或清除数据。
+- 选择后续修复提交，跨两个 Dart 文件编译两处变化函数；未重建基线，业务 Widget 测试通过。
+- 后台发布后，App 经局域网自行下载；下次冷启动加载补丁并上报 `patch_healthy`，首帧、业务导航和健康状态正常。
+- 后台签名撤回后，App 上报 `withdrawn`；再冷启动恢复基线，原补丁进入黑名单。
+
+补丁验收期间未重新安装 App、未通过 USB 放入补丁。后台操作通过真实管理 HTTP API 执行，
+没有逐项点击浏览器控件或人工逐页视觉验收。私有诊断产物保存在
+`work/ios-business-20261014/`；签名、设备身份和任务状态不随源码分发。
+这不代表任意 Dart 改动、全部业务插件、生产分发或 App Store 审核已验证。
+
 ```sh
 python3 -B console/server_check.py
 python3 -B tool/app_cli_check.py
 python3 -B tool/android_release_check.py
+python3 -B tool/ios_release_check.py
+python3 -B tool/ios_integration_check.py
 cd console/web
 npm ci
 npm run build
@@ -159,7 +187,7 @@ npm run build
 这轮没有把上述示例安装到手机，也没有新增客户端真机证据；报告页面只验证了
 服务查询及空结果展示。既有 Android 客户端证据见 [ANDROID_ACCEPTANCE.md](../ANDROID_ACCEPTANCE.md)。
 
-当前不接 iOS/OHOS，不包含 Jenkins 适配、远程多执行器、自动灰度策略、审批流或基线导入。
+OHOS 尚未接入；不包含 Jenkins 适配、远程多执行器、自动灰度策略、审批流或基线导入。
 
 ## 局域网开发测试
 

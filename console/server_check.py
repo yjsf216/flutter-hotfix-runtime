@@ -90,6 +90,53 @@ class ConsoleCheck(unittest.TestCase):
             self.console.prepare({'id': 'a' * 24})
         self.assertEqual(list(self.console.workspace.iterdir()), [])
 
+    def test_failed_ios_build_keeps_generated_evidence_and_restores_owned_inputs(self):
+        originals = {'ios/Runner.xcodeproj/project.pbxproj': b'project input',
+                     'ios/Runner/Info.plist': b'plist input'}
+        for relative, content in originals.items():
+            file = self.project / relative
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_bytes(content)
+        subprocess.run(['git', '-C', self.project, 'add', 'ios'], check=True)
+        subprocess.run(['git', '-C', self.project, 'commit', '-qm', 'ios inputs'], check=True)
+        commit = server.app.run(['git', '-C', self.project, 'rev-parse', 'HEAD'], capture=True).strip()
+        self.console.profile['platform'] = 'ios'
+        original_execute = self.console.execute
+
+        def execute(task, command, *args, **kwargs):
+            if any(str(part).endswith('/tool/app_cli.py') for part in command):
+                for relative in originals:
+                    (self.console.workspace / relative).write_bytes(b'generated on failure')
+                raise ValueError('native build failed')
+            return original_execute(task, command, *args, **kwargs)
+
+        with patch.object(self.console, 'prepare_dependencies'), patch.object(self.console, 'execute', side_effect=execute):
+            task = self.console.submit({'action': 'build', 'commit': commit})
+            self.assertEqual(self.wait()['status'], 'failed')
+        for relative, content in originals.items():
+            self.assertEqual((self.console.workspace / relative).read_bytes(), content)
+            evidence = self.console.root / (task['id'] + '.generated') / relative
+            self.assertEqual(evidence.read_bytes(), b'generated on failure')
+        self.assertEqual(self.console.git('status', '--porcelain'), '')
+        self.assertEqual(self.console.state['baselines'], [])
+
+    def test_platforms_use_separate_profiles_workspaces_and_process_environment(self):
+        server.app.save(self.project / '.hotfix/ios/local.json', {'ready': True, 'platform': 'ios',
+            'project': str(self.project), 'keys': '/private/test-keys', 'environment': {'FLUTTER_SDK': '/missing'}})
+        ios = server.Console(self.project, 'ios')
+        try:
+            self.assertNotEqual(ios.workspace, self.console.workspace)
+            self.assertEqual(ios.local, self.project / '.hotfix/ios')
+            self.assertNotEqual(ios.token_file, self.console.token_file)
+            task = {'id': '9' * 24}
+            ios.prepare(task)
+            self.assertTrue((ios.workspace / '.hotfix/ios/local.json').exists())
+            import sys
+            ios.execute(task, [sys.executable, '-c', 'import os; print(os.environ.get("HOTFIX_ACTIVE_PLATFORM"))'])
+            self.assertTrue((ios.root / (task['id'] + '.log')).read_text().rstrip().endswith('ios'))
+        finally:
+            ios.close()
+
     def test_local_dependency_lock_copied_but_tracked_lock_preserved(self):
         self.console.prepare({'id': 'c' * 24})
         source = self.project / 'pubspec.lock'
@@ -147,6 +194,25 @@ class ConsoleCheck(unittest.TestCase):
         self.assertEqual((self.console.root / (('f' * 24) + '.generated') / 'macos/Flutter/GeneratedPluginRegistrant.swift').read_text(),
                          'pub generated desktop registration')
 
+    def test_ios_generated_inputs_are_frozen_per_baseline_and_private(self):
+        self.console.prepare({'id': '1' * 24})
+        generated = self.console.workspace / 'ios/Flutter/Generated.xcconfig'
+        generated.parent.mkdir(parents=True)
+        generated.write_text('FLUTTER_BUILD_MODE=release\n')
+        archive = self.console.root / 'ios-base'
+        server.app.save(archive / 'baseline/project.json', {'platform': 'ios', 'sources': {
+            'ios/Flutter/Generated.xcconfig': server.app.digest(generated)}})
+        saved = self.console.freeze_ios_inputs(archive, {'id': '2' * 24})
+        base = {'id': 'base', 'path': str(archive), 'iosInputs': saved}
+        generated.write_text('FLUTTER_BUILD_MODE=debug\n')
+        self.console.restore_ios_inputs(base)
+        self.assertEqual(generated.read_text(), 'FLUTTER_BUILD_MODE=release\n')
+        self.console.state['baselines'].append(base)
+        self.assertNotIn('iosInputs', self.console.snapshot()['baselines'][0])
+        Path(saved['ios/Flutter/Generated.xcconfig']['path']).write_text('tampered')
+        with self.assertRaisesRegex(ValueError, '冻结输入'):
+            self.console.restore_ios_inputs(base)
+
     def test_restart_marks_running_interrupted_and_excludes_secrets(self):
         self.console.state['tasks'].append({'id': 'a' * 24, 'status': 'running'})
         self.console.persist()
@@ -176,6 +242,14 @@ class ConsoleCheck(unittest.TestCase):
             self.assertEqual(request('GET', '/api/state', extra={'Host': 'attacker.invalid'})[0], 400)
             self.assertEqual(request('GET', '/api/state', extra={'Origin': 'https://evil.invalid'})[0], 400)
             self.assertEqual(request('GET', '/api/state')[0], 200)
+            archive = self.console.root / 'ios-archive'
+            archive.mkdir()
+            (archive / 'app.ipa').write_bytes(b'signed-ipa-test')
+            self.console.state['baselines'].append({'id': 'ios-base', 'platform': 'ios', 'path': str(archive),
+                'ipaSha256': server.app.digest(archive / 'app.ipa')})
+            self.assertEqual(request('GET', '/api/package/ios-base'), (200, b'signed-ipa-test'))
+            (archive / 'app.ipa').write_bytes(b'tampered')
+            self.assertEqual(request('GET', '/api/package/ios-base')[0], 400)
             self.assertEqual(request('GET', '/api/log/../../access-token')[0], 400)
             self.assertEqual(request('GET', '/../server.py')[0], 400)
             self.assertEqual(request('POST', '/api/tasks', '[]', {'Content-Type': 'application/json'})[0], 400)
@@ -219,6 +293,19 @@ class ConsoleCheck(unittest.TestCase):
         self.assertEqual(candidate['status'], 'published')
         self.assertEqual(calls[0], calls[1])
         self.assertIn('https://frozen.example.invalid', calls[0])
+
+    def test_large_build_log_keeps_final_error_and_redacts_tail(self):
+        import sys
+        task = {'id': '8' * 24}
+        script = 'import sys; print("BUILD START"); sys.stdout.write("x" * (9 * 1024 * 1024)); print(); print(sys.argv[1]); print("FINAL FAILURE")'
+        self.console.execute(task, [sys.executable, '-c', script, self.console.token])
+        content = (self.console.root / (task['id'] + '.log')).read_bytes()
+        self.assertTrue(content.startswith(b'BUILD START'))
+        self.assertTrue(content.endswith(b'FINAL FAILURE\n'))
+        self.assertIn(b'output omitted', content)
+        self.assertIn(b'[REDACTED]', content)
+        self.assertNotIn(self.console.token.encode(), content)
+        self.assertLess(len(content), 8 * 1024 * 1024 + 100)
 
     def test_build_environment_does_not_inherit_publish_token_and_logs_redact(self):
         task = {'id': 'b' * 24}

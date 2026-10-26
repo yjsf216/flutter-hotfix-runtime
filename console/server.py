@@ -37,21 +37,24 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 class Console:
-    def __init__(self, project):
+    def __init__(self, project, platform=None):
         self.project = project.resolve()
         project = self.project
         app.require((self.project / '.git').is_dir() and not (self.project / '.hotfix').is_symlink(),
                     '需要独立 App Git 仓库和普通 .hotfix 目录')
-        profile = app.read(project / '.hotfix/local.json')
+        self.local = app.toolchain.profile_directory(project, platform)
+        self.local_relative = self.local.relative_to(project)
+        self.platform_scope = self.local.name if self.local != project / '.hotfix' else None
+        profile = app.read(self.local / 'local.json')
         app.require(profile.get('ready') and profile.get('project') == str(self.project),
                     '请先在 App 根目录完成 hotfix init')
         ignored = subprocess.run(['git', '-C', project, 'check-ignore', '-q', '--',
-                                  '.hotfix/console/access-token'], capture_output=True)
+                                  str(self.local_relative / 'console/access-token')], capture_output=True)
         app.require(ignored.returncode == 0 and not app.run(
                     ['git', '-C', project, 'ls-files', '--', '.hotfix'], capture=True).strip(),
                     '.hotfix 必须完全忽略且没有被 Git 跟踪的文件，避免提交凭据和任务产物')
         self.profile = profile
-        self.root = project / '.hotfix/console'
+        self.root = self.local / 'console'
         app.require(not self.root.is_symlink(), '管理目录不能是软链接')
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.lock = (self.root / 'server.lock').open('a')
@@ -74,7 +77,9 @@ class Console:
         self.process = None
         self.thread = None
         self.stopping = False
-        self.workspace = project.parent / ('.hotfix-console-' + self.root_id())
+        self.workspace = project.parent / ('.hotfix-console-' + self.root_id() +
+                                          ('-' + self.platform_scope if self.platform_scope else ''))
+        self.workspace_local = self.workspace / self.local_relative
         self.persist()
 
     def root_id(self):
@@ -112,7 +117,7 @@ class Console:
                 destination.write_bytes(source.read_bytes())
                 destination.chmod(0o600)
         managed = {**self.profile, 'project': str(self.workspace)}
-        app.save(self.workspace / '.hotfix/local.json', managed)
+        app.save(self.workspace_local / 'local.json', managed)
 
     def freeze_local_properties(self, archive, task):
         expected = app.read(archive / 'baseline/project.json')['sources'].get('android/local.properties')
@@ -126,6 +131,35 @@ class Console:
         destination.write_bytes(source.read_bytes())
         destination.chmod(0o600)
         return {'path': str(destination), 'sha256': expected}
+
+    def freeze_ios_inputs(self, archive, task):
+        metadata = app.read(archive / 'baseline/project.json')
+        if metadata.get('platform') != 'ios':
+            return None
+        saved = {}
+        for relative, sha in metadata['sources'].items():
+            if not relative.startswith('ios/') or self.git('ls-files', '--', relative):
+                continue
+            source = self.workspace / relative
+            app.require(source.is_file() and not source.is_symlink() and app.digest(source) == sha, 'iOS 生成输入变化: ' + relative)
+            destination = self.root / (task['id'] + '.inputs') / relative
+            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            destination.write_bytes(source.read_bytes())
+            saved[relative] = {'path': str(destination), 'sha256': sha}
+        return saved
+
+    def restore_ios_inputs(self, baseline):
+        metadata = app.read(Path(baseline['path']) / 'baseline/project.json')
+        saved = baseline.get('iosInputs') or {}
+        for relative, record in saved.items():
+            parts = Path(relative).parts
+            app.require(parts[0] == 'ios' and '..' not in parts and not Path(relative).is_absolute(), '无效冻结输入路径')
+            source = Path(record['path'])
+            destination = self.workspace / relative
+            app.require(not destination.is_symlink() and not any(p.is_symlink() for p in destination.parents), '不恢复软链接输入')
+            app.require(source.is_file() and not source.is_symlink() and metadata['sources'].get(relative) == record['sha256'] and app.digest(source) == record['sha256'], 'iOS 冻结输入被修改')
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(source.read_bytes())
 
     def restore_local_properties(self, baseline):
         expected = app.read(Path(baseline['path']) / 'baseline/project.json')['sources'].get('android/local.properties')
@@ -146,6 +180,8 @@ class Console:
 
     def execute(self, task, args, cwd=None, extra=None):
         env = {**os.environ, **self.profile['environment'], **(extra or {})}
+        if self.platform_scope:
+            env['HOTFIX_ACTIVE_PLATFORM'] = self.platform_scope
         env.pop('HOTFIX_CONSOLE_TOKEN', None)
         env['GIT_TERMINAL_PROMPT'] = '0'
         # Publish credentials are not inherited by builds/Git subprocesses.
@@ -158,23 +194,33 @@ class Console:
                                        stderr=subprocess.STDOUT, start_new_session=True)
             self.process = process
         secrets_to_hide = [self.token, os.environ.get('HOTFIX_PUBLISH_TOKEN', '')]
-        local_token = self.project / '.hotfix/publish-token'
+        local_token = self.local / 'publish-token'
         if local_token.is_file():
             secrets_to_hide.append(local_token.read_text().strip())
         try:
             with (self.root / (task['id'] + '.log')).open('ab') as log:
                 size = 0
+                tail = bytearray()
                 for line in iter(lambda: process.stdout.readline(64 * 1024), b''):
                     text = line.decode('utf-8', errors='replace')
                     for secret in secrets_to_hide:
                         if secret:
                             text = text.replace(secret, '[REDACTED]')
                     data = text.encode()
-                    # shortcut: keep first 8 MiB, use external log storage for large CI builds.
-                    if size < 8 * 1024 * 1024:
-                        log.write(data[:8 * 1024 * 1024 - size])
+                    # Keep startup context and final diagnostics within 8 MiB.
+                    head_limit = 4 * 1024 * 1024
+                    remaining = max(0, head_limit - size)
+                    if remaining:
+                        log.write(data[:remaining])
                         log.flush()
+                    tail.extend(data[remaining:])
+                    if len(tail) > head_limit:
+                        del tail[:-head_limit]
                     size += len(data)
+                if tail:
+                    if size > 8 * 1024 * 1024:
+                        log.write(b'\n[intermediate build output omitted; final diagnostics follow]\n')
+                    log.write(tail)
             app.require(process.wait() == 0, '命令失败，请查看构建日志')
         finally:
             if process.poll() is None:
@@ -279,17 +325,40 @@ class Console:
                 self.prepare_dependencies(task)
                 if action == 'patch':
                     base = self.item('baselines', task['baseline'])
-                    app.save(self.workspace / '.hotfix/state.json', {'baseline': base['path'], 'toolStamp': base['toolStamp']})
-                self.execute(task, [sys.executable, '-B', ROOT / 'tool/app_cli.py', action], self.workspace)
-                state = app.read(self.workspace / '.hotfix/state.json')
+                    self.restore_ios_inputs(base)
+                    app.save(self.workspace_local / 'state.json', {'baseline': base['path'], 'toolStamp': base['toolStamp']})
+                # Flutter/CocoaPods may rewrite these tracked inputs even when
+                # a native build fails. Preserve evidence, then restore only
+                # this job's pre-build bytes in the managed checkout. The
+                # release compiler still rejects any source drift itself.
+                native_before = {}
+                if action == 'build' and self.profile.get('platform') == 'ios':
+                    for relative in ('ios/Runner.xcodeproj/project.pbxproj', 'ios/Runner/Info.plist'):
+                        file = self.workspace / relative
+                        app.require(file.is_file() and not file.is_symlink(), 'iOS 构建输入必须是普通文件')
+                        native_before[relative] = file.read_bytes()
+                try:
+                    self.execute(task, [sys.executable, '-B', ROOT / 'tool/app_cli.py', action], self.workspace)
+                finally:
+                    for relative, original in native_before.items():
+                        file = self.workspace / relative
+                        app.require(file.is_file() and not file.is_symlink(), 'iOS 构建改变了输入文件类型')
+                        if file.read_bytes() != original:
+                            saved = self.root / (task['id'] + '.generated') / relative
+                            saved.parent.mkdir(parents=True, exist_ok=True)
+                            saved.write_bytes(file.read_bytes())
+                            file.write_bytes(original)
+                state = app.read(self.workspace_local / 'state.json')
                 if action == 'build':
                     path = Path(state['baseline'])
-                    receipt = app.read(path / 'android-release.json')
+                    receipt = app.archive_receipt(path)
                     result = {'id': task['id'], 'path': str(path), 'toolStamp': state['toolStamp'],
                               'baselineId': receipt['baselineId'], 'release': receipt['release'],
                               'appId': receipt['appId'], 'commit': receipt['gitCommit'],
-                              'apkSha256': receipt['apkSha256'],
+                              'platform': receipt.get('platform', 'android'),
+                              **({'ipaSha256': receipt['ipaSha256']} if receipt.get('platform') == 'ios' else {'apkSha256': receipt['apkSha256']}),
                               'origin': app.read(path / 'baseline/project.json')['updateOrigin'],
+                              'iosInputs': self.freeze_ios_inputs(path, task),
                               'localProperties': self.freeze_local_properties(path, task)}
                     collection = 'baselines'
                 else:
@@ -324,7 +393,7 @@ class Console:
         origin = frozen['updateOrigin']
         development = app.local_http(origin, frozen.get('allowDevelopmentLan') is True)
         token = os.environ.get('HOTFIX_PUBLISH_TOKEN', '')
-        local = self.project / '.hotfix/publish-token'
+        local = self.local / 'publish-token'
         if not token and development and local.is_file():
             token = local.read_text().strip()
         app.require(len(token) >= 24, '服务端缺少发布凭据；本机请先启动 serve，正式环境注入 HOTFIX_PUBLISH_TOKEN')
@@ -361,13 +430,16 @@ class Console:
             for item in data[collection]:
                 if collection == 'patches':
                     item['withdrawalStarted'] = bool(item.get('withdrawal'))
-                for key in ('path', 'baseline', 'withdrawal', 'localProperties'):
+                for key in ('path', 'baseline', 'withdrawal', 'localProperties', 'iosInputs'):
                     item.pop(key, None)
         commits = app.run(['git', '-C', self.project, 'log', '--all', '-100', '--format=%H%x09%s'], capture=True)
         data['commits'] = [dict(zip(('sha', 'subject'), line.split('\t', 1))) for line in commits.splitlines()]
-        data.update(project=self.project.name, workspace=str(self.workspace), active=self.active,
+        tool_keys = ('FLUTTER_SDK', 'GEN_SNAPSHOT', 'DART_SDK_SOURCE')
+        if app.target_platform(self.profile) == 'android':
+            tool_keys += ('ANDROID_SDK_ROOT', 'JAVA_HOME')
+        data.update(project=self.project.name, platform=app.target_platform(self.profile), workspace=str(self.workspace), active=self.active,
                     prerequisites={key: Path(value).exists() for key, value in self.profile['environment'].items()
-                                   if key in ('FLUTTER_SDK', 'GEN_SNAPSHOT', 'DART_SDK_SOURCE', 'ANDROID_SDK_ROOT', 'JAVA_HOME')})
+                                   if key in tool_keys})
         return data
 
     def stats(self, baseline):
@@ -377,7 +449,7 @@ class Console:
         origin = frozen['updateOrigin']
         development = app.local_http(origin, frozen.get('allowDevelopmentLan') is True)
         token = os.environ.get('HOTFIX_PUBLISH_TOKEN', '')
-        local = self.project / '.hotfix/publish-token'
+        local = self.local / 'publish-token'
         if not token and development and local.is_file():
             token = local.read_text().strip()
         app.require(len(token) >= 24, '缺少发布凭据')
@@ -443,13 +515,14 @@ def handler(console):
                     if self.command == 'GET' and path.path == '/api/state':
                         self.send(200, console.snapshot())
                         return
-                    if self.command == 'GET' and path.path.startswith('/api/apk/'):
-                        base = console.item('baselines', path.path.removeprefix('/api/apk/'))
+                    if self.command == 'GET' and path.path.startswith(('/api/apk/', '/api/package/')):
+                        base = console.item('baselines', path.path.rsplit('/', 1)[-1])
                         app.require(base is not None, '基线不存在')
-                        file = Path(base['path']) / 'app.apk'
-                        app.require(app.digest(file) == base['apkSha256'], '归档 APK 已被修改')
+                        ios = base.get('platform') == 'ios'
+                        file = Path(base['path']) / ('app.ipa' if ios else 'app.apk')
+                        app.require(app.digest(file) == base['ipaSha256' if ios else 'apkSha256'], '归档安装包已被修改')
                         self.send_response(200)
-                        self.send_header('Content-Type', 'application/vnd.android.package-archive')
+                        self.send_header('Content-Type', 'application/octet-stream' if ios else 'application/vnd.android.package-archive')
                         self.send_header('Content-Length', str(file.stat().st_size))
                         self.send_header('Cache-Control', 'no-store')
                         self.send_header('X-Content-Type-Options', 'nosniff')
@@ -501,18 +574,19 @@ def handler(console):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='本机 Android 热更新后台，无 Jenkins 依赖')
+    parser = argparse.ArgumentParser(description='本机 Android/iOS 热更新后台，无 Jenkins 依赖')
     parser.add_argument('--project', type=Path, default=Path.cwd())
+    parser.add_argument('--platform', choices=['android', 'ios'])
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--with-delivery', action='store_true', help='同时启动配置中显式允许的开发 HTTP 分发服务')
     args = parser.parse_args()
     os.umask(0o077)
     app.require(1 <= args.port <= 65535, '端口无效')
-    console = Console(args.project.resolve())
+    console = Console(args.project.resolve(), args.platform)
     delivery = None
     try:
         if args.with_delivery:
-            config = app.read(console.project / 'hotfix.android.json')
+            config = app.read(console.project / ('hotfix.' + app.target_platform(console.profile) + '.json'))
             origin = config['updateOrigin']
             app.require(app.local_http(origin, config.get('allowDevelopmentLan') is True),
                         '--with-delivery 只适用于显式开发 HTTP 测试地址')
@@ -521,8 +595,11 @@ def main():
             app.require(port != args.port, '管理与分发服务不能使用相同端口')
             with socket.socket() as probe:
                 probe.bind((host, port))
+            delivery_env = {**os.environ, **console.profile['environment']}
+            if console.platform_scope:
+                delivery_env['HOTFIX_ACTIVE_PLATFORM'] = console.platform_scope
             delivery = subprocess.Popen([sys.executable, '-B', str(ROOT / 'tool/app_cli.py'), 'serve'],
-                cwd=console.project, env={**os.environ, **console.profile['environment']},
+                cwd=console.project, env=delivery_env,
                 stdin=subprocess.DEVNULL, start_new_session=True)
             ready = False
             for _ in range(100):
