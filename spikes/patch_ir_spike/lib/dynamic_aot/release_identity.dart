@@ -3,7 +3,7 @@ const baselineId = 'dbc3-host-baseline-v1';
 const releaseIdentity = <String, Object?>{
   'appId': String.fromEnvironment('HOTFIX_APP_ID', defaultValue: 'dev.hotfixruntime.fixture'),
   'platform': String.fromEnvironment('HOTFIX_PLATFORM', defaultValue: 'host'),
-  'abi': 'arm64',
+  'abi': String.fromEnvironment('HOTFIX_ABI', defaultValue: 'arm64'),
   'release': String.fromEnvironment('HOTFIX_RELEASE', defaultValue: '1.0.0+1'),
   'flutterRevision': '00b0c91f06209d9e4a41f71b7a512d6eb3b9c694',
   'dartVersion': '3.11.5',

@@ -2,6 +2,17 @@
 
 本页记录开发验收范围，不替代生产发布检查。日常命令见[简化流程](GETTING_STARTED.md)。
 
+## Android ARM32 最小闭环（2026-10-26）
+
+使用 `patch_runtime` 0.3.1、Engine `3.41.9-ddm.3` 和 `"abi": "arm"`，已在支持
+armeabi-v7a 的授权设备上验证集成 App：基础包安装后以 32 位进程启动；签名补丁下载后，
+下次冷启动加载测试函数，首帧和导航正常、启动错误为空，服务端收到 `patch_healthy`。
+本轮仅验证这个最小闭环，未扩展全业务或多渠道回归；32/64 位仍分别生成基础包与补丁，不组装融合 APK。
+
+必要的 ARM32 修复见 `engine/patches/arm32_interpreter_pool.patch`：上游解释器调用桩把
+R5 当作临时寄存器，但它也是 ARM32 AOT 常量池指针；调用返回后会导致常量读取崩溃。
+修复使用 IP 暂存，保留 R5。不能仅凭基础包能启动判断未经修复的 ARM32 引擎可用于热更新。
+
 ## 可重复的 Flutter 编译检查
 
 使用固定 Flutter/Dart 工具链、定制 Android arm64 `gen_snapshot` 和已解析依赖的 Flutter App。输出目录必须不存在。

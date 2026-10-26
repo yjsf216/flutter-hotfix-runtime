@@ -18,7 +18,7 @@ Android/iOS 的有限真机验证及在线补丁闭环已完成；**不是生产
 - [Git-based patch workflow](GIT_WORKFLOW.md): `release-git` records a commit;
   `patch-git` selects changes from a clean target commit; `patchScope: lib` enables
   supported multi-file changes in existing compiled project libraries.
-  `release-android` archives a signed arm64 APK and its matching baseline;
+  `release-android` archives a signed arm/arm64 APK and its matching baseline;
   `patch-android` builds and signs a compatible patch from a clean Git commit.
 
 - [Architecture](ARCHITECTURE.md) and [compatibility limits](COMPATIBILITY.md).

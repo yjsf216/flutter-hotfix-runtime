@@ -356,6 +356,7 @@ class Console:
                               'baselineId': receipt['baselineId'], 'release': receipt['release'],
                               'appId': receipt['appId'], 'commit': receipt['gitCommit'],
                               'platform': receipt.get('platform', 'android'),
+                              'abi': receipt.get('abi', 'arm64'),
                               **({'ipaSha256': receipt['ipaSha256']} if receipt.get('platform') == 'ios' else {'apkSha256': receipt['apkSha256']}),
                               'origin': app.read(path / 'baseline/project.json')['updateOrigin'],
                               'iosInputs': self.freeze_ios_inputs(path, task),

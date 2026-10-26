@@ -51,7 +51,7 @@ class RetentionPolicy {
     for (final value in records.values) {
       final row = value as Map;
       if (retired(row['baselineId'] as String)) continue;
-      final group = jsonEncode([row['appId'], row['platform'], row['channel']]);
+      final group = jsonEncode([row['appId'], row['platform'], row['abi'] ?? 'arm64', row['channel']]);
       groups.putIfAbsent(group, () => []).add(row);
     }
     return groups.values.expand((rows) {
@@ -111,6 +111,7 @@ class RetentionPolicy {
         'baselineId': id,
         'appId': baseline['appId'],
         'platform': baseline['platform'],
+        'abi': baseline['abi'] ?? 'arm64',
         'release': baseline['release'],
         'channel': channel,
         'sequence': sequence,

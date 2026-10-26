@@ -39,8 +39,8 @@ class BaselineRegistry {
       'packageSize',
     };
     if (value is! Map ||
-        value.length != keys.length ||
-        !value.keys.toSet().containsAll(keys)) {
+        !value.keys.toSet().containsAll(keys) ||
+        value.keys.any((key) => !keys.contains(key) && key != 'abi')) {
       throw const FormatException('baseline metadata');
     }
     final m = Map<String, dynamic>.from(value);
@@ -54,6 +54,8 @@ class BaselineRegistry {
         !matches('release', RegExp(r'^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$')) ||
         !matches('sourceBranch', RegExp(r'^[a-zA-Z0-9_./-]{1,200}$')) ||
         !['android', 'ios'].contains(m['platform']) ||
+        !['arm', 'arm64'].contains(m['abi'] ?? 'arm64') ||
+        m['platform'] == 'ios' && (m['abi'] ?? 'arm64') != 'arm64' ||
         m['packageSize'] is! int ||
         m['packageSize'] <= 0 ||
         m['packageSize'] > 1024 * 1024 * 1024) {

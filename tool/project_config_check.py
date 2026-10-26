@@ -78,6 +78,16 @@ class ProjectConfigCheck(unittest.TestCase):
         result, _ = self.android([{'flavor': '', 'appId': 'com.example.app'}], {'platform': 'android'})
         self.assertEqual(cfg.native_options(result), {'flavor': ''})
 
+    def test_android_selects_native_variant_by_abi(self):
+        rows = [{'flavor': name, 'appId': 'com.example.app', 'abis': abis} for name, abis in
+                [('mainch', ['armeabi-v7a']), ('main64', ['arm64-v8a']),
+                 ('mainmerge', ['armeabi-v7a', 'arm64-v8a'])]]
+        result, _ = self.android(rows, {'platform': 'android', 'abi': 'arm',
+                                       'dartDefines': {'APP_CHANNEL': 'main64'}})
+        self.assertEqual(result['native']['flavor'], 'mainch')
+        with self.assertRaises(ValueError):
+            self.android(rows, {'platform': 'android', 'abi': 'arm', 'native': {'flavor': 'main64'}})
+
     def test_conflicting_schema_and_unknown_options_rejected(self):
         for value in [{'platform': 'android', 'native': {}, 'androidFlavor': 'old'},
                       {'platform': 'android', 'native': {'team': 'ABCDEFGHIJ'}},
@@ -123,6 +133,8 @@ class ProjectConfigCheck(unittest.TestCase):
             file = self.root / 'engine' / relative
             file.parent.mkdir(parents=True, exist_ok=True)
             file.touch()
+        (self.root / 'engine/lib.stripped/libflutter.so').write_bytes(
+            b'\x7fELF\x02\x01' + bytes(12) + (183).to_bytes(2, 'little'))
         environment = {'FLUTTER_SDK': str(self.root), 'GEN_SNAPSHOT': str(generator),
                        'ANDROID_BUILD_TOOLS': str(self.root)}
         for platform, build, native in [

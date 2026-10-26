@@ -1,7 +1,7 @@
 """Android APK + frozen Git baseline, using existing compiler and Gradle signing.
 
 No Git mutation, device installation or publication is performed here.
-Only the pinned arm64 APK pipeline is supported; successful archives contain
+Each APK targets arm or arm64 with its paired Engine; successful archives contain
 android-release.json, written last. Failed outputs must never be distributed.
 """
 import base64
@@ -18,6 +18,7 @@ import zipfile
 
 from project_config import native_options, resolve_config
 import engine_bundle
+from target_arch import ANDROID, abi_for, verify_elf
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -75,20 +76,25 @@ def apk_info(apk, build_tools):
     return {'appId': match[1], 'release': f'{match[3]}+{match[2]}', 'certificates': certs}
 
 
-def verify_libs(apk, expected):
+def verify_libs(apk, expected, abi='arm64'):
+    prefix = 'lib/' + ANDROID[abi][1] + '/'
     with zipfile.ZipFile(apk) as archive:
         names = archive.namelist()
         require(len(names) == len(set(names)), 'Duplicate APK entries')
-        require('lib/arm64-v8a/libpatch_store_io.so' in names, 'Native hotfix store missing')
-        require(not any(n.startswith('lib/') and not n.startswith('lib/arm64-v8a/')
-                        for n in names), 'Only arm64 APKs are supported')
+        require(prefix + 'libpatch_store_io.so' in names, 'Native hotfix store missing')
+        require(not any(n.startswith('lib/') and not n.startswith(prefix)
+                        for n in names), 'APK must contain only the selected ABI')
+        for name in names:
+            if name.startswith(prefix) and name.endswith('.so'):
+                with archive.open(name) as stream:
+                    verify_elf(stream.read(20), abi)
         for name, value in expected.items():
-            require(hashlib.sha256(archive.read('lib/arm64-v8a/' + name)).hexdigest() == value,
+            require(hashlib.sha256(archive.read(prefix + name)).hexdigest() == value,
                     f'APK does not contain frozen {name}')
 
 
-def verify_packaged_content(original, packaged):
-    """Only the frozen AOT/Engine, signatures and removed non-arm64 ABIs may change."""
+def verify_packaged_content(original, packaged, abi='arm64'):
+    """Only frozen AOT/Engine, signatures and removal of other ABIs may change."""
     def contents(path):
         with zipfile.ZipFile(path) as archive:
             names = archive.namelist()
@@ -98,8 +104,9 @@ def verify_packaged_content(original, packaged):
                 name = entry.filename
                 signature = name == 'META-INF/MANIFEST.MF' or (
                     name.startswith('META-INF/') and name.rsplit('.', 1)[-1] in {'SF', 'RSA', 'DSA', 'EC'})
-                other_abi = name.startswith('lib/') and not name.startswith('lib/arm64-v8a/')
-                replaced = name in {'lib/arm64-v8a/libapp.so', 'lib/arm64-v8a/libflutter.so'}
+                prefix = 'lib/' + ANDROID[abi][1] + '/'
+                other_abi = name.startswith('lib/') and not name.startswith(prefix)
+                replaced = name in {prefix + 'libapp.so', prefix + 'libflutter.so'}
                 if entry.is_dir() or other_abi or replaced or signature:
                     continue
                 sha = hashlib.sha256()
@@ -113,7 +120,7 @@ def verify_packaged_content(original, packaged):
             'Packaged DEX/resources/assets/native plugins differ from the verified native APK')
 
 
-def init_script():
+def init_script(abi='arm64'):
     # Properties are passed as arguments, never interpolated into Groovy source.
     return '''gradle.projectsEvaluated {
     def app = gradle.rootProject.findProject(':app')
@@ -129,13 +136,13 @@ def init_script():
         outputs.upToDateWhen { false }
         doLast {
             def base = new File(app.buildDir, 'intermediates/stripped_native_libs/' + variant)
-            def candidates = [new File(base, 'out/lib/arm64-v8a'),
-                new File(base, 'strip' + variant.capitalize() + 'DebugSymbols/out/lib/arm64-v8a')].findAll { it.isDirectory() }
-            if (candidates.size() != 1) throw new GradleException('Missing or ambiguous arm64 strip output')
+            def candidates = [new File(base, 'out/lib/@ABI@'),
+                new File(base, 'strip' + variant.capitalize() + 'DebugSymbols/out/lib/@ABI@')].findAll { it.isDirectory() }
+            if (candidates.size() != 1) throw new GradleException('Missing or ambiguous ABI strip output')
             def dest = candidates[0]
             // CMake/dependencies can contribute other ABIs despite Flutter's target.
             // Only remove generated strip outputs, never source/native inputs.
-            dest.parentFile.listFiles().findAll { it.isDirectory() && it.name != 'arm64-v8a' }.each { app.delete(it) }
+            dest.parentFile.listFiles().findAll { it.isDirectory() && it.name != '@ABI@' }.each { app.delete(it) }
             ['libapp.so': 'hotfixAot', 'libflutter.so': 'hotfixEngine'].each { name, prop ->
                 def source = new File(app.property(prop))
                 if (!source.isFile()) throw new GradleException('Missing ' + prop)
@@ -144,7 +151,7 @@ def init_script():
         }
     }
 }
-'''
+'''.replace('@ABI@', ANDROID[abi][1])
 
 
 def release(config_path, output, resume=False):
@@ -153,7 +160,9 @@ def release(config_path, output, resume=False):
     project = (config_path.parent / config['project']).resolve()
     commit = head(project)
     require(config['platform'] == 'android', 'Android only')
-    bundle = engine_bundle.from_project(project, 'android')
+    abi = abi_for(config)
+    flutter_target, jni_abi, _, _ = ANDROID[abi]
+    bundle = engine_bundle.from_project(project, 'android', abi)
     if bundle:
         os.environ.update(bundle)
     config = resolve_config(config, project)
@@ -168,6 +177,8 @@ def release(config_path, output, resume=False):
     engine = generator.parent.parent / 'lib.stripped/libflutter.so'
     build_tools = Path(os.environ['ANDROID_BUILD_TOOLS']).resolve()
     require(engine.is_file(), 'Matching custom libflutter.so missing')
+    with engine.open('rb') as stream:
+        verify_elf(stream.read(20), abi)
     require(not (output / 'android-release.json').exists(), 'Completed archives are immutable')
     require(output.is_dir() if resume else not output.exists(), 'Use fresh output, or explicit --resume-packaging')
     require('+' in config['release'], 'release must include versionName+versionCode')
@@ -194,7 +205,7 @@ def release(config_path, output, resume=False):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if not resume:
             run([flutter / 'bin/flutter', 'build', 'apk', '--release', '--no-pub',
-                 '--target-platform', 'android-arm64', *(['--flavor', flavor] if flavor else []),
+                 '--target-platform', flutter_target, *(['--flavor', flavor] if flavor else []),
                  '--build-name', version, '--build-number', code,
                  *['--dart-define=' + k + '=' + v for k, v in defines.items()]], project, env=env)
         require(head(project) == commit, 'Build changed tracked/untracked source')
@@ -222,28 +233,28 @@ def release(config_path, output, resume=False):
             require(digest(project / relative) == expected, 'Baseline source changed: ' + relative)
         variant = flavor + 'Release' if flavor else 'release'
         script = output / 'package.init.gradle'
-        script.write_text(init_script())
+        script.write_text(init_script(abi))
         libs = {'libapp.so': digest(baseline / 'libapp.so'), 'libflutter.so': digest(engine)}
         strip_root = project / f'build/app/intermediates/stripped_native_libs/{variant}'
-        stripped_dirs = [strip_root / 'out/lib/arm64-v8a',
-                         strip_root / f'strip{variant[0].upper() + variant[1:]}DebugSymbols/out/lib/arm64-v8a']
+        stripped_dirs = [strip_root / ('out/lib/' + jni_abi),
+                         strip_root / f'strip{variant[0].upper() + variant[1:]}DebugSymbols/out/lib/{jni_abi}']
         try:
             run([project / 'android/gradlew', '-p', project / 'android', '--init-script', script,
                  ':app:assemble' + variant[0].upper() + variant[1:], '-PhotfixRuntime=true',
-                 '-Ptarget-platform=android-arm64', '-PhotfixVariant=' + variant,
+                 '-Ptarget-platform=' + flutter_target, '-PhotfixVariant=' + variant,
                  '-PhotfixAot=' + str(baseline / 'libapp.so'), '-PhotfixEngine=' + str(engine),
                  '-Pdart-defines=' + ','.join(base64.b64encode((k + '=' + v).encode()).decode()
                                              for k, v in defines.items())], project, env=env)
             packaged = project / 'build/app/outputs/apk' / flavor / 'release' / apk_name
             apk = output / 'app.apk'
             shutil.copyfile(packaged, apk)
-            verify_libs(apk, libs)
-            verify_packaged_content(original, apk)
+            verify_libs(apk, libs, abi)
+            verify_packaged_content(original, apk, abi)
             require(apk_info(apk, build_tools) == original_info, 'Packaged identity/signature changed')
             require(head(project) == commit, 'Git changed during packaging')
             # Success marker is written last; an interrupted archive cannot be patched.
             write(output / 'android-release.json', {
-                'schemaVersion': 1, **original_info, 'gitCommit': commit,
+                'schemaVersion': 1, **original_info, 'gitCommit': commit, 'abi': abi,
                 'baselineId': read(baseline / 'release/release.json')['baselineId'],
                 'apkSha256': digest(apk), 'libraries': libs,
                 'flutterSdk': str(flutter), 'generatorSha256': digest(generator),
@@ -260,7 +271,7 @@ def release(config_path, output, resume=False):
                     for name in libs:
                         target = stripped / name
                         if target.is_file():
-                            target.write_bytes(archive.read('lib/arm64-v8a/' + name))
+                            target.write_bytes(archive.read('lib/' + jni_abi + '/' + name))
 
 
 def patch(archive, ref, output, keys, patch_id):
@@ -271,7 +282,7 @@ def patch(archive, ref, output, keys, patch_id):
     require(read(baseline / 'project.json')['gitCommit'] == receipt['gitCommit'] and
             read(baseline / 'release/release.json')['baselineId'] == receipt['baselineId'],
             'Archive/baseline mismatch')
-    verify_libs(archive / 'app.apk', receipt['libraries'])
+    verify_libs(archive / 'app.apk', receipt['libraries'], receipt.get('abi', 'arm64'))
     cli('patch-git', baseline, ref, output)
     cli('sign', baseline, output, keys, patch_id)
     print('PASS: signed patch ready for test and explicit publication:', output, flush=True)

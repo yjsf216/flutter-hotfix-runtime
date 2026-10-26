@@ -33,7 +33,8 @@ Future<void> main(List<String> args) async {
     final identity = Map<String, Object?>.from(manifest['identity'] as Map);
     if (identity['appId'] != defines['HOTFIX_APP_ID'] ||
         identity['release'] != defines['HOTFIX_RELEASE'] ||
-        identity['platform'] != defines['HOTFIX_PLATFORM'])
+        identity['platform'] != defines['HOTFIX_PLATFORM'] ||
+        identity['abi'] != (defines['HOTFIX_ABI'] ?? 'arm64'))
       throw StateError('identity mismatch');
     final verifier = SignedManifestVerifier(
       baselineId: recipe['baselineId'] as String,

@@ -25,7 +25,7 @@ def _inside(root, name):
     return path
 
 
-def verify(manifest_path, target):
+def verify(manifest_path, target, abi='arm64'):
     manifest_path = Path(manifest_path)
     if manifest_path.is_symlink():
         raise ValueError('Engine manifest must not be a symlink')
@@ -36,9 +36,14 @@ def verify(manifest_path, target):
         raise ValueError('Unsupported Engine bundle revision or build host')
     if target not in ('android', 'ios'):
         raise ValueError('Unsupported Engine target')
-    entry = data['targets'][target]
-    if entry.get('abi') != 'arm64' or entry.get('mode') != 'release' or entry.get('dynamicModules') is not True:
-        raise ValueError('Engine requires arm64 Release dynamic modules')
+    if abi not in ('arm', 'arm64') or target == 'ios' and abi != 'arm64':
+        raise ValueError('Unsupported Engine ABI')
+    key = 'android-arm' if target == 'android' and abi == 'arm' else target
+    if key not in data['targets']:
+        raise ValueError('Runtime package has no Engine for ' + target + '/' + abi)
+    entry = data['targets'][key]
+    if entry.get('abi') != abi or entry.get('mode') != 'release' or entry.get('dynamicModules') is not True:
+        raise ValueError('Engine requires matching ABI Release dynamic modules')
     root = manifest_path.parent
     records = data['files']
     if not isinstance(records, dict) or not records:
@@ -66,7 +71,8 @@ def verify(manifest_path, target):
     engine = build / ('Flutter.framework/Flutter' if target == 'ios' else 'lib.stripped/libflutter.so')
     if engine != _inside(root, entry['engine']) or build / 'args.gn' != _inside(root, entry['args']):
         raise ValueError('Engine bundle layout does not match its paired generator')
-    return {'GEN_SNAPSHOT': str(generator.resolve()), 'HOTFIX_ENGINE_MANIFEST': str(manifest_path.resolve())}
+    return {'GEN_SNAPSHOT': str(generator.resolve()), 'HOTFIX_ENGINE_MANIFEST': str(manifest_path.resolve()),
+            'HOTFIX_TARGET_ABI': abi}
 
 
 def _digest(stream):
@@ -76,7 +82,7 @@ def _digest(stream):
     return digest.hexdigest()
 
 
-def from_project(project, target):
+def from_project(project, target, abi='arm64'):
     config = Path(project).resolve() / '.dart_tool/package_config.json'
     if not config.is_file():
         return None
@@ -96,4 +102,4 @@ def from_project(project, target):
     if not selection.is_file():
         return None  # patch_runtime 0.1.0 contains no Engine distribution.
     manifest = _inside(package / 'engine', json.loads(selection.read_text())['manifest'])
-    return verify(manifest, target)
+    return verify(manifest, target, abi)

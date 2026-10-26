@@ -20,6 +20,7 @@ import engine_bundle
 import toolchain
 import upload_baseline
 import upload_patch
+from target_arch import abi_for
 from ci_baselines import Catalogue
 from retention_client import Client
 
@@ -29,14 +30,15 @@ def commit(source, ref):
     return run(['git', 'rev-parse', '--verify', '--end-of-options', ref + '^{commit}'], source, True).strip()
 
 
-def baseline_tag(platform, release, subject, identity):
+def baseline_tag(platform, release, subject, identity, abi='arm64'):
     require(platform in ('android', 'ios') and re.fullmatch(r'[a-f0-9]{64}', identity), 'Invalid baseline identity')
     require(re.fullmatch(r'[A-Za-z0-9.+_-]+', release) and '..' not in release, 'Invalid release label')
     subject = re.sub(r'^[A-Za-z]+(?:\([^)]*\))?!?:\s*', '', subject.strip())
     subject = re.sub(r'[^\w-]+', '_', subject).strip('_-') or '无提交说明'
     if len(subject) > 24:
         subject = subject[:24] + '…'
-    name = 'Android' if platform == 'android' else 'iOS'
+    abi_for({'platform': platform, 'abi': abi})
+    name = ('Android32' if abi == 'arm' else 'Android64') if platform == 'android' else 'iOS'
     return f'基线·{name}·{release}·{subject}·{identity[:12]}'
 
 
@@ -94,9 +96,9 @@ def source_directory(source, project, ref, cache_root=None):
     require(head(project) == ref, 'Unexpected checkout commit')
 
 
-def environment(config, project, platform):
+def environment(config, project, platform, abi='arm64'):
     saved = dict(config['environment'])
-    args = argparse.Namespace(platform=platform, project=project)
+    args = argparse.Namespace(platform=platform, project=project, abi=abi)
     env = toolchain.discover(args, saved)
     failures = [c['name'] for c in toolchain.inspect(env) if not c['ok']]
     require(not failures, 'Missing toolchain inputs: ' + ', '.join(failures))
@@ -148,8 +150,10 @@ def baseline(args, config, catalogue, source, ref):
                  'windows/flutter/generated_plugins.cmake']:
         if run(['git', 'ls-files', '--', path], project, True).strip():
             run(['git', 'restore', '--source=HEAD', '--worktree', '--', path], project)
-    env = environment(config, project, args.platform)
     settings = read(project / ('hotfix.' + args.platform + '.json'))
+    settings['abi'] = getattr(args, 'abi', None) or settings.get('abi', 'arm64')
+    abi = abi_for({**settings, 'platform': args.platform})
+    env = environment(config, project, args.platform, abi)
     require(settings['updateOrigin'].rstrip('/') == config['origin'].rstrip('/'), 'App update origin differs from CI upload origin')
     require(settings.get('patchNumberingOrigin', '').rstrip('/') == config['origin'].rstrip('/'), 'Automatic patch numbering origin required')
     settings.update(project=str(project), release=app_info(project, env)['version'])
@@ -181,7 +185,7 @@ def baseline(args, config, catalogue, source, ref):
     # Dedicated tags expose baseline choices through Jenkins's existing Git
     # Parameter plugin. They never alter App branches or ordinary release tags.
     subject = run(['git', 'show', '-s', '--format=%s', ref], project, True).strip()
-    tag = baseline_tag(args.platform, receipt['release'], subject, receipt['baselineId'])
+    tag = baseline_tag(args.platform, receipt['release'], subject, receipt['baselineId'], abi)
     if run(['git', 'tag', '--list', tag], project, True).strip():
         require(run(['git', 'rev-parse', 'refs/tags/' + tag], project, True).strip() == ref, 'Baseline tag differs')
     else:
@@ -189,7 +193,7 @@ def baseline(args, config, catalogue, source, ref):
     run(['git', 'push', 'origin', 'refs/tags/' + tag], project)
     trim_build_cache(project)
     return {'kind': 'baseline', 'baselineId': receipt['baselineId'], 'release': receipt['release'],
-            'platform': args.platform, 'channel': channel, 'sourceCommit': ref, 'baselineTag': tag,
+            'platform': args.platform, 'abi': abi, 'channel': channel, 'sourceCommit': ref, 'baselineTag': tag,
             'managementUrl': config['origin'] + '/'}
 
 
@@ -202,7 +206,8 @@ def patch_inner(args, config, catalogue, source, ref):
     project = directory / 'project'
     require(Path(read(archive / 'baseline/project.json')['project']).resolve() == project, 'Baseline workspace moved')
     source_directory(source, project, ref, Path(config['dataRoot']) / 'git-cache')
-    env = environment(config, project, args.platform)
+    abi = receipt.get('abi', 'arm64')
+    env = environment(config, project, args.platform, abi)
     require(app_info(project, env)['version'] == receipt['release'], 'App version changed; build a new base')
     require(digest(Path(config['keys']) / 'public-key.txt') == receipt['publicKeySha256'], 'Signing key differs from baseline')
     os.environ.update(env)
@@ -216,7 +221,7 @@ def patch_inner(args, config, catalogue, source, ref):
     trim_build_cache(project)
     manifest = read(output/'manifest.json')['manifest']
     return {'kind': 'patch', 'baselineId': receipt['baselineId'], 'release': receipt['release'],
-            'platform': args.platform, 'patchId': manifest['patchId'], 'patchNumber': manifest.get('patchNumber'),
+            'platform': args.platform, 'abi': abi, 'patchId': manifest['patchId'], 'patchNumber': manifest.get('patchNumber'),
             'sourceCommit': ref, 'status': 'uploaded', 'managementUrl': config['origin'] + '/'}
 
 
@@ -225,6 +230,7 @@ def main():
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--mode', choices=['baseline', 'patch', 'patch-inner'], required=True)
     parser.add_argument('--platform', choices=['android', 'ios'], required=True)
+    parser.add_argument('--abi', choices=['arm', 'arm64'], help='Base builds only; patches use the frozen ABI')
     parser.add_argument('--source', type=Path, required=True)
     parser.add_argument('--commit', required=True)
     parser.add_argument('--branch', required=True)

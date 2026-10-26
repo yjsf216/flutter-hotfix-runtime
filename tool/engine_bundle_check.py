@@ -10,6 +10,23 @@ import engine_bundle as bundle
 
 
 class EngineBundleCheck(unittest.TestCase):
+    def test_arm32_is_selected_explicitly_and_cannot_fall_back_to_arm64(self):
+        with self.assertRaises(ValueError):
+            bundle.verify(self.manifest, 'android', 'arm')
+        entry = dict(self.data['targets']['android'])
+        entry['abi'] = 'arm'
+        for field in ['generator', 'engine', 'args']:
+            old = entry[field]
+            new = old.replace('android-arm64/', 'android-arm/').replace('gen_snapshot_arm64', 'gen_snapshot_armv7')
+            path = self.root / new;path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'fixture');path.chmod(0o755)
+            self.data['files'][new] = dict(self.data['files'][old]);entry[field] = new
+        self.data['targets']['android-arm'] = entry;self.write()
+        result = bundle.from_project(self.project, 'android', 'arm')
+        self.assertEqual(result['HOTFIX_TARGET_ABI'], 'arm')
+        self.assertTrue(result['GEN_SNAPSHOT'].endswith('gen_snapshot_armv7'))
+        with self.assertRaises(ValueError):bundle.verify(self.manifest, 'ios', 'arm')
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

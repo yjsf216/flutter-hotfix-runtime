@@ -7,7 +7,7 @@ export function baselineRows(records) {
     || a.baselineId.localeCompare(b.baselineId))
   const seen = new Set()
   return ordered.map(record => {
-    const key = JSON.stringify([record.appId, record.platform, record.channel || ''])
+    const key = JSON.stringify([record.appId, record.platform, record.abi || 'arm64', record.channel || ''])
     const isLatest = !record.deletedAt && time(record.registeredAt) > 0 && !seen.has(key)
     if (isLatest) seen.add(key)
     return { ...record, isLatest }

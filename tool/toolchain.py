@@ -61,13 +61,17 @@ def discover(args, saved=None):
         values['JAVA_HOME'] = command(['/usr/libexec/java_home', '-v', '17'])
     values['DART_SDK_SOURCE'] = values['DART_SDK_SOURCE'] or str(ROOT / 'work/upstream/dart-sdk')
     target = getattr(args, 'platform', None) or saved.get('HOTFIX_TARGET_PLATFORM', 'android')
+    abi = getattr(args, 'abi', None) or saved.get('HOTFIX_TARGET_ABI', 'arm64')
     bundle = None if getattr(args, 'gen_snapshot', None) else engine_bundle.from_project(
-        getattr(args, 'project', None) or Path.cwd(), target)
+        getattr(args, 'project', None) or Path.cwd(), target, abi)
     if bundle:
         values.update(bundle)
+    generator_cpu = 'armv7' if abi == 'arm' else 'arm64'
     values['GEN_SNAPSHOT'] = values['GEN_SNAPSHOT'] or str(ROOT /
-        f'work/upstream/flutter-engine-ddm/engine/src/out/hotfix_{target}_release_arm64/artifacts_arm64/gen_snapshot_arm64')
-    values = {k: str(Path(v).expanduser().resolve()) if v else '' for k, v in values.items()}
+        f'work/upstream/flutter-engine-ddm/engine/src/out/hotfix_{target}_release_{abi}/artifacts_arm64/gen_snapshot_{generator_cpu}')
+    values = {k: str(Path(v).expanduser().resolve()) if v else '' for k, v in values.items()
+              if k != 'HOTFIX_TARGET_ABI'}
+    values['HOTFIX_TARGET_ABI'] = abi
     values['DART_BIN'] = str(Path(values['FLUTTER_SDK']) / 'bin/cache/dart-sdk/bin/dart') if values['FLUTTER_SDK'] else ''
     if target == 'ios':
         values['HOTFIX_TARGET_PLATFORM'] = target
@@ -86,7 +90,8 @@ def inspect(env):
         checks.append({'name': name, 'ok': bool(ok), 'detail': detail, 'hint': '' if ok else hint})
     if env.get('HOTFIX_ENGINE_MANIFEST'):
         try:
-            bundle = engine_bundle.verify(env['HOTFIX_ENGINE_MANIFEST'], 'ios' if ios else 'android')
+            bundle = engine_bundle.verify(env['HOTFIX_ENGINE_MANIFEST'], 'ios' if ios else 'android',
+                                          env.get('HOTFIX_TARGET_ABI', 'arm64'))
             valid = Path(env.get('GEN_SNAPSHOT', '')).resolve() == Path(bundle['GEN_SNAPSHOT'])
             check('engine-bundle', valid, env['HOTFIX_ENGINE_MANIFEST'], 'Engine/generator must match the verified bundle')
         except (ValueError, OSError, KeyError) as error:
@@ -141,7 +146,7 @@ def inspect(env):
           '使用固定 Dart 提交 ' + DART_REVISION + '；设置 --dart-sdk-source。')
     args = build / 'args.gn'
     text = args.read_text() if args.is_file() else ''
-    expected = {'target_os': '"ios"' if ios else '"android"', 'target_cpu': '"arm64"', 'flutter_runtime_mode': '"release"',
+    expected = {'target_os': '"ios"' if ios else '"android"', 'target_cpu': '"' + env.get('HOTFIX_TARGET_ABI', 'arm64') + '"', 'flutter_runtime_mode': '"release"',
                 'dart_dynamic_modules': 'true', 'dart_version': '"' + DART_REVISION + '"'}
     correct = all(re.search(r'(?m)^' + key + r'\s*=\s*' + re.escape(value) + r'\s*$', text) for key, value in expected.items())
     check('ddm-configuration', correct, str(args), '需要 Android / arm64 / release / DDM=true 及固定 Dart 的 args.gn；普通 Flutter Engine 不适用。')
@@ -170,6 +175,7 @@ def bind_runtime_sdk(env):
 def main():
     parser = argparse.ArgumentParser(description='只读检查固定工具链，汇总缺项并给出安装步骤')
     parser.add_argument('--platform', choices=['android', 'ios'])
+    parser.add_argument('--abi', choices=['arm', 'arm64'])
     for option in PATH_OPTIONS:
         parser.add_argument('--' + option.replace('_', '-'))
     parser.add_argument('--project', type=Path, default=Path.cwd())

@@ -2,6 +2,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { baselineRows, formatUploadTime } from './baseline_list.js'
 
+test('32-bit and 64-bit packages have independent latest markers', () => {
+  const row = { appId: 'one', platform: 'android', channel: 'main', registeredAt: '2026-10-19T10:00:00Z' }
+  const result = baselineRows([{ ...row, baselineId: 'a', abi: 'arm' },
+    { ...row, baselineId: 'b', abi: 'arm64' }, { ...row, baselineId: 'c' }])
+  assert.equal(result.filter(r => r.isLatest).length, 2)
+})
+
 test('channels have independent latest baselines', () => {
   const row = { appId: 'one', platform: 'android', registeredAt: '2026-10-19T10:00:00Z' }
   const result = baselineRows([{ ...row, baselineId: 'a', channel: 'main' },

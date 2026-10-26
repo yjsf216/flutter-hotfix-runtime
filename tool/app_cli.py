@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 from android_release import ROOT, digest, head, read, require, run
 import toolchain
 import engine_bundle
+from target_arch import abi_for
 from project_config import native_options
 
 ENTRY = '''import 'dart:io';
@@ -218,7 +219,7 @@ def integration_plan(project, info, origin, allow_lan=False, dart_source=None):
     native = f'''// Generated hotfix integration; preserve the app's signing configuration.
 android {{
     flavorDimensions 'hotfixDistribution'
-    productFlavors {{ hotfix {{ dimension 'hotfixDistribution'; ndk {{ abiFilters 'arm64-v8a' }} }} }}
+    productFlavors {{ hotfix {{ dimension 'hotfixDistribution'; ndk {{ abiFilters 'armeabi-v7a', 'arm64-v8a' }} }} }}
     if (project.hasProperty('hotfixRuntime')) {{
         externalNativeBuild {{ cmake {{ path file('{cmake_path}'); version '3.22.1' }} }}
     }}
@@ -383,13 +384,15 @@ def perform(project, action, yes=False):
         print(json.dumps({'baseline': state.get('baseline'), 'patch': state.get('patch')}, indent=2))
         return
     if action in ('build', 'patch'):
-        bundle = engine_bundle.from_project(project, platform)
-        if bundle:
-            profile = {**profile, 'environment': {**profile['environment'], **bundle}}
         # Clear implicit publication selection before a new attempt, including
         # preflight failures, so a failed build cannot publish yesterday's patch.
         state.pop('patch', None)
         save(state_file, state)
+        abi = (abi_for(read(project / f'hotfix.{platform}.json')) if action == 'build'
+               else baseline_for(project, state)[1].get('abi', 'arm64'))
+        bundle = engine_bundle.from_project(project, platform, abi)
+        if bundle:
+            profile = {**profile, 'environment': {**profile['environment'], **bundle}}
         validate_tools(profile['environment'])
         stamp = tool_stamp()
         commit = head(project)

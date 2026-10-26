@@ -252,6 +252,7 @@ Future<void> command(List<String> args, {bool projectPatch = false}) async {
       '-DHOTFIX_APP_ID=${defines['HOTFIX_APP_ID']}',
       if (number != null) '-DHOTFIX_PATCH_NUMBER=$number',
       '-DHOTFIX_PLATFORM=${metadata['platform']}',
+      '-DHOTFIX_ABI=${metadata['abi'] ?? 'arm64'}',
       '-DHOTFIX_RELEASE=${metadata['release']}',
       '${repo.path}/spikes/patch_ir_spike/tool/signature_check.dart',
       'sign',
@@ -322,16 +323,19 @@ Future<void> command(List<String> args, {bool projectPatch = false}) async {
         fail('entry/library must be under project lib/');
     }
     if (!['android', 'ios'].contains(config['platform']))
-      fail('only Android/iOS arm64 are supported');
+      fail('only Android/iOS are supported');
+    final abi = config['abi'] ?? 'arm64';
+    if (!['arm', 'arm64'].contains(abi) || config['platform'] == 'ios' && abi != 'arm64')
+      fail('unsupported platform ABI');
     final gn = File('${generator.parent.parent.path}/args.gn');
     if (!gn.existsSync() ||
         !gn.readAsStringSync().contains(
           'target_os = "${config['platform']}"',
         ) ||
         !gn.readAsStringSync().contains('dart_dynamic_modules = true') ||
-        !gn.readAsStringSync().contains('target_cpu = "arm64"')) {
+        !gn.readAsStringSync().contains('target_cpu = "$abi"')) {
       fail(
-        'GEN_SNAPSHOT must come from the matching pinned arm64 DDM Engine build',
+        'GEN_SNAPSHOT must come from the matching pinned $abi DDM Engine build',
       );
     }
     final output = Directory(args[2]).absolute;
@@ -375,6 +379,7 @@ Future<void> command(List<String> args, {bool projectPatch = false}) async {
           'flutter.dart_plugin_registrant': registrant.uri.toString(),
         'HOTFIX_APP_ID': config['appId'] as String,
         'HOTFIX_PLATFORM': config['platform'] as String,
+        'HOTFIX_ABI': abi as String,
         'HOTFIX_RELEASE': config['release'] as String,
         'HOTFIX_TEST_PUBLIC_KEY': publicKey,
         'HOTFIX_NATIVE_STORE': 'true',

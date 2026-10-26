@@ -3,9 +3,15 @@ import hashlib
 import os
 from pathlib import Path
 import tempfile
+import subprocess
 import zipfile
 from unittest.mock import patch
 import android_release as build
+
+
+def elf(payload=b'code', abi='arm64'):
+    _, _, bits, machine = build.ANDROID[abi]
+    return b'\x7fELF' + bytes([bits, 1]) + bytes(12) + machine.to_bytes(2, 'little') + payload
 
 
 def rejects(action):
@@ -19,18 +25,18 @@ def rejects(action):
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
     apk = root / 'app.apk'
-    expected = {'libapp.so': hashlib.sha256(b'aot').hexdigest()}
+    expected = {'libapp.so': hashlib.sha256(elf(b'aot')).hexdigest()}
     with zipfile.ZipFile(apk, 'w') as archive:
-        archive.writestr('lib/arm64-v8a/libapp.so', b'aot')
-        archive.writestr('lib/arm64-v8a/libpatch_store_io.so', b'native')
+        archive.writestr('lib/arm64-v8a/libapp.so', elf(b'aot'))
+        archive.writestr('lib/arm64-v8a/libpatch_store_io.so', elf(b'native'))
     build.verify_libs(apk, expected)
     original = root / 'native.apk'
     with zipfile.ZipFile(original, 'w') as archive:
         archive.writestr('classes.dex', b'frozen classes')
         archive.writestr('resources.arsc', b'frozen resources')
         archive.writestr('assets/flutter_assets/test.txt', b'frozen asset')
-        archive.writestr('lib/arm64-v8a/libapp.so', b'stock aot')
-        archive.writestr('lib/arm64-v8a/libpatch_store_io.so', b'native')
+        archive.writestr('lib/arm64-v8a/libapp.so', elf(b'stock aot'))
+        archive.writestr('lib/arm64-v8a/libpatch_store_io.so', elf(b'native'))
         archive.writestr('META-INF/CERT.SF', b'old signature')
     with zipfile.ZipFile(apk, 'a') as archive:
         archive.writestr('classes.dex', b'frozen classes')
@@ -53,6 +59,18 @@ with tempfile.TemporaryDirectory() as directory:
     with zipfile.ZipFile(apk, 'a') as archive:
         archive.writestr('lib/x86/libapp.so', b'wrong architecture')
     rejects(lambda: build.verify_libs(apk, expected))
+    arm_apk = root / 'arm.apk'
+    arm_aot = elf(b'arm aot', 'arm')
+    with zipfile.ZipFile(arm_apk, 'w') as archive:
+        archive.writestr('lib/armeabi-v7a/libapp.so', arm_aot)
+        archive.writestr('lib/armeabi-v7a/libpatch_store_io.so', elf(b'native', 'arm'))
+    arm_expected = {'libapp.so': hashlib.sha256(arm_aot).hexdigest()}
+    build.verify_libs(arm_apk, arm_expected, 'arm')
+    rejects(lambda: build.verify_libs(arm_apk, arm_expected, 'arm64'))
+    with zipfile.ZipFile(arm_apk, 'w') as archive:
+        archive.writestr('lib/armeabi-v7a/libapp.so', elf(b'wrong architecture'))
+        archive.writestr('lib/armeabi-v7a/libpatch_store_io.so', elf(b'native', 'arm'))
+    rejects(lambda: build.verify_libs(arm_apk, {}, 'arm'))
     with patch.object(build, 'run', side_effect=[
         "package: name='example.app' versionCode='12' versionName='1.2'\n",
         'Signer #1 certificate SHA-256 digest: ' + 'a' * 64 + '\n',
@@ -78,10 +96,10 @@ with tempfile.TemporaryDirectory() as directory:
               'appId': 'example.app', 'release': '1.2+12'}
     build.write(root / 'config.json', config)
     (root / 'pubspec.yaml').write_text('version: 1.2+12\n')
-    (root / '.git').mkdir()
+    subprocess.run(['git', 'init', '-q', str(root)], check=True)
     engine = root / 'engine/lib.stripped/libflutter.so'
     engine.parent.mkdir(parents=True)
-    engine.write_bytes(b'engine')
+    engine.write_bytes(elf(b'engine'))
     generator = root / 'engine/artifacts_arm64/gen_snapshot'
     generator.parent.mkdir()
     generator.write_bytes(b'generator')

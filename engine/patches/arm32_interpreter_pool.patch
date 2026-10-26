@@ -1,0 +1,27 @@
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm.cc b/runtime/vm/compiler/stub_code_compiler_arm.cc
+index 6d0a7e38..b43ea1bf 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm.cc
+@@ -2838,15 +2838,17 @@ void StubCodeCompiler::GenerateInterpretCallStub() {
+   __ StoreToOffset(FP, THR, target::Thread::top_exit_frame_info_offset());
+ 
+   // Mark that the thread exited generated code through a runtime call.
+-  __ LoadImmediate(R5, target::Thread::exit_through_runtime_call());
+-  __ StoreToOffset(R5, THR, target::Thread::exit_through_ffi_offset());
++  // R5 is PP on ARM32 and must remain valid across the interpreter call.
++  // AOT LeaveStubFrame does not restore the global pool pointer.
++  __ LoadImmediate(IP, target::Thread::exit_through_runtime_call());
++  __ StoreToOffset(IP, THR, target::Thread::exit_through_ffi_offset());
+ 
+   // Mark that the thread is executing VM code.
+-  __ LoadFromOffset(R5, THR,
++  __ LoadFromOffset(IP, THR,
+                     target::Thread::interpret_call_entry_point_offset());
+-  __ StoreToOffset(R5, THR, target::Thread::vm_tag_offset());
++  __ StoreToOffset(IP, THR, target::Thread::vm_tag_offset());
+ 
+-  __ blx(R5);
++  __ blx(IP);
+ 
+   // Mark that the thread is executing Dart code.
+   __ LoadImmediate(R2, VMTag::kDartTagId);

@@ -11,6 +11,7 @@ import plistlib
 import subprocess
 import sys
 import tempfile
+from target_arch import ANDROID, abi_for
 
 _KEYS = {
     'android': {'flavor': 'androidFlavor'},
@@ -67,7 +68,9 @@ def _android(config, project, overrides):
   app.tasks.register('printPatchNativeConfig') {
     doLast {
       def rows = app.android.applicationVariants.findAll { it.buildType.name == 'release' }.collect {
-        [flavor: it.flavorName, appId: it.applicationId]
+        def configuredFlavor = app.android.productFlavors.findByName(it.flavorName)
+        [flavor: it.flavorName, appId: it.applicationId,
+         abis: (configuredFlavor?.ndk?.abiFilters ?: app.android.defaultConfig.ndk.abiFilters ?: []).toList().sort()]
       }
       println('PATCH_NATIVE_CONFIG=' + groovy.json.JsonOutput.toJson(rows))
     }
@@ -92,12 +95,24 @@ def _android(config, project, overrides):
     if not isinstance(rows, list) or any(not isinstance(row, dict) or
             not isinstance(row.get('flavor'), str) or not isinstance(row.get('appId'), str) for row in rows):
         raise ValueError('Invalid Gradle variants response')
+    jni_abi = ANDROID[abi_for(config)][1]
+    if any(not isinstance(r.get('abis', []), list) or
+           any(not isinstance(a, str) for a in r.get('abis', [])) for r in rows):
+        raise ValueError('Invalid Gradle ABI filters')
+    rows = [r for r in rows if not r.get('abis') or jni_abi in r['abis']]
+    if not rows:
+        raise ValueError('No release variant supports ' + jni_abi)
     names = [row['flavor'] for row in rows]
     selected = overrides.get('flavor')
     channel = defines.get('APP_CHANNEL')
     # Only use an explicit business-channel selection when it exactly names a variant.
     if selected is None and channel in names:
         selected = channel
+    if selected is None:
+        exact = [r for r in rows if r.get('abis') == [jni_abi]]
+        if exact:
+            rows = exact
+            names = [r['flavor'] for r in rows]
     flavor = _choose(names, selected, 'flavor')
     candidates = [row for row in rows if row['flavor'] == flavor]
     if len(candidates) != 1:
@@ -148,6 +163,7 @@ def _ios(config, project, overrides):
 def resolve_config(config, project):
     """Resolve missing inputs only; explicit legacy configurations remain unchanged."""
     options = native_options(config)
+    abi_for(config)
     required = {'flavor'} if config['platform'] == 'android' else {'team', 'scheme', 'minimumVersion'}
     if required <= set(options) and config.get('appId'):
         return dict(config)

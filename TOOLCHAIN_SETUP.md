@@ -13,7 +13,11 @@ sh /path/to/flutter-hotfix-runtime/tool/hotfix doctor --guide
 iOS arm64 的签名和构建要求见 [iOS 指南](IOS_GETTING_STARTED.md)及 [Engine 说明](engine/README.md)。
 使用后台无需 Node、数据库或 Jenkins。`patch_runtime` 0.2.0 起在插件仓库携带配套 Engine 制品；
 App 执行 `flutter pub get` 后，本工具从实际 Pub 包目录发现并校验它们，不要求固定个人目录。
-当前制品仅支持 macOS arm64 构建宿主和 Android/iOS arm64 Release；其他组合仍需另行构建验证。
+制品支持 macOS arm64 构建宿主、Android arm/arm64 和 iOS arm64 Release。
+Android ARM32（armeabi-v7a）需要 `patch_runtime` 0.3.1 / Engine `3.41.9-ddm.3`，
+配置文件设置 `"abi": "arm"`；省略时仍为 arm64。每种 ABI 分别生成基线和补丁，当前不组装双 ABI APK。
+ARM32 重建前，需在独立 Engine 的 Dart checkout 应用 `engine/patches/arm32_interpreter_pool.patch`，
+再运行 `sh engine/build_android_ddm.sh arm`。该修复避免解释器返回时破坏 ARM32 的常量池寄存器。
 固定 Dart 编译器源码和依赖仍必需，不包含在 Engine 制品里。
 
 ## 1. 基础工具与 Flutter

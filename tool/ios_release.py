@@ -14,6 +14,7 @@ import zipfile
 from android_release import ROOT, cli, digest, head, read, require, run, write
 from project_config import native_options, resolve_config
 import engine_bundle
+from target_arch import abi_for
 
 
 def sections(path):
@@ -63,6 +64,7 @@ def release(config_path, output, resume=False):
     config_path = config_path.resolve()
     config = read(config_path)
     require(config['platform'] == 'ios', 'iOS only')
+    abi_for(config)
     project = (config_path.parent / config['project']).resolve()
     commit = head(project)
     require(not (output / 'ios-release.json').exists(), 'Completed archives are immutable')
@@ -189,7 +191,7 @@ def release(config_path, output, resume=False):
             for file in sorted(app.rglob('*')):
                 if file.is_file():
                     ipa_zip.write(file, str(file.relative_to(output)))
-        receipt = {'schemaVersion': 1, 'platform': 'ios', 'appId': config['appId'], 'release': config['release'],
+        receipt = {'schemaVersion': 1, 'platform': 'ios', 'abi': 'arm64', 'appId': config['appId'], 'release': config['release'],
                    'gitCommit': commit, 'baselineId': read(baseline / 'release/release.json')['baselineId'],
                    'ipaSha256': digest(ipa), 'teamId': native_config['team'], 'certificateSha256': digest(certificate),
                    'generatorSha256': digest(generator), 'sections': frozen_sections,

@@ -39,6 +39,8 @@ def upload(origin, archive, source_branch, source_commit):
     metadata = {key: receipt[key] for key in ('baselineId', 'appId', 'release', 'gitCommit')}
     metadata.update(platform=platform, sourceBranch=source_branch, sourceCommit=source_commit,
                     packageSha256=receipt[extension + 'Sha256'], packageSize=package.stat().st_size)
+    if 'abi' in receipt:
+        metadata['abi'] = receipt['abi']
     opener = build_opener(NoRedirect)
 
     def post(path, data, content_type='application/json'):

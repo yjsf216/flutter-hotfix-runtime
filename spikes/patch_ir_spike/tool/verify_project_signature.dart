@@ -15,6 +15,7 @@ void main(List<String> args) {
       ...releaseIdentity,
       'appId': defines['HOTFIX_APP_ID'],
       'platform': defines['HOTFIX_PLATFORM'],
+      'abi': defines['HOTFIX_ABI'] ?? 'arm64',
       'release': defines['HOTFIX_RELEASE'],
     },
     publicKeys: {

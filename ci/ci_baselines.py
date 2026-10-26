@@ -77,6 +77,8 @@ class Catalogue:
             if len(accepted) != 1 or any(accepted[0][k] != value for k, value in
                     [('appId', receipt['appId']), ('platform', platform), ('release', receipt['release'])]):
                 raise ValueError('Server has not confirmed this completed baseline')
+            if accepted[0].get('abi', 'arm64') != receipt.get('abi', 'arm64'):
+                raise ValueError('Server ABI differs from completed baseline')
             rows = self.rows()
             if identity in rows and rows[identity]['archive'] != str(archive):
                 raise ValueError('Baseline location is immutable')

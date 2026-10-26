@@ -75,6 +75,16 @@ Future<void> main() async {
       'packageSha256': sha256.convert(bytes).toString(),
     };
     final body = utf8.encode(jsonEncode(metadata));
+    check(registry.validate({...metadata, 'abi': 'arm'})['abi'] == 'arm', 'ARM32 metadata rejected');
+    check(!registry.validate(metadata).containsKey('abi'), 'Legacy metadata changed during normalization');
+    for (final invalid in [
+      {...metadata, 'abi': 'x86'},
+      {...metadata, 'platform': 'ios', 'abi': 'arm'},
+    ]) {
+      var rejected = false;
+      try { registry.validate(invalid); } on FormatException { rejected = true; }
+      check(rejected, 'unsupported ABI accepted');
+    }
     check(
       (await call('POST', '', admin, body)).$1 == 401,
       'admin cannot upload',

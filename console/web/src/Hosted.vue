@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { baselineRows, formatUploadTime } from './baseline_list.js'
+import { eventRows, eventSummary } from './patch_events.js'
 
 const token = ref('')
 const loggedIn = ref(false)
@@ -77,7 +78,7 @@ async function activate(record, kind) {
   busy.value = true; error.value = ''; notice.value = ''
   try {
     await api('v1/activate', { baselineId: m.baselineId, patchId: m.patchId, kind })
-    notice.value = '操作已完成，客户端结果请查看运行结果。'
+    notice.value = '操作已完成，客户端结果请查看补丁列表中的运行情况。'
     await refresh()
   } catch (e) { error.value = e.message } finally { busy.value = false }
 }
@@ -92,7 +93,7 @@ async function activate(record, kind) {
     <p v-if="error" role="alert" class="error">{{ error }}</p><button class="primary" :disabled="busy">登录</button>
   </form></main>
   <div v-else class="layout">
-    <aside><div class="brand">Flutter Hotfix</div><nav aria-label="主导航"><button v-for="name in ['基础版本', '补丁发布', '运行结果']" :key="name" :class="{active: tab === name}" @click="tab = name">{{ name }}</button></nav></aside>
+    <aside><div class="brand">Flutter Hotfix</div><nav aria-label="主导航"><button v-for="name in ['基础版本', '补丁发布']" :key="name" :class="{active: tab === name}" @click="tab = name">{{ name }}</button></nav></aside>
     <div class="main"><header><span>热更新管理 / {{ tab }}</span><button :disabled="busy" @click="logout">退出</button></header>
       <section class="content"><div class="page-heading"><h1>{{ tab }}</h1><button :disabled="busy" @click="refresh">刷新</button></div>
         <p v-if="error" class="message error" role="alert">{{ error }}</p><p v-if="notice" class="message success" role="status">{{ notice }}</p>
@@ -106,8 +107,8 @@ async function activate(record, kind) {
           <p class="hint">删除仅移除管理记录，可恢复；不会删除 CDN 文件、本地归档或停止补丁分发。iOS 安装仍受签名与设备授权限制。</p>
           <div class="table-wrap"><table><thead><tr><th>App</th><th>平台</th><th>版本 / 状态</th><th>上传完成时间</th><th>来源分支 / 提交</th><th>基线 / 构建提交</th><th>安装包</th><th>操作</th></tr></thead><tbody>
             <tr v-for="m in orderedBaselines" :key="m.baselineId" :class="{'latest-baseline': m.isLatest, 'deleted-baseline': m.deletedAt}">
-              <td>{{ m.appId }}</td><td>{{ m.platform }}<br><small>{{ m.channel || '未纳入保留策略' }}</small></td>
-              <td>{{ m.release }}<br><span v-if="m.isLatest" class="latest-badge">最新上传</span><span v-else-if="m.deletedAt" class="deleted-badge">已删除</span></td>
+              <td>{{ m.appId }}</td><td>{{ m.platform }} / {{ m.abi || 'arm64' }}<br><small>{{ m.channel || '未纳入保留策略' }}</small></td>
+              <td>{{ m.release }}<br><small class="baseline-health">{{ eventSummary(eventRows(events, m.baselineId)) }}</small><br><span v-if="m.isLatest" class="latest-badge">最新上传</span><span v-else-if="m.deletedAt" class="deleted-badge">已删除</span></td>
               <td class="upload-time" :title="m.registeredAt">{{ formatUploadTime(m.registeredAt) }}<small v-if="m.deletedAt">删除于 {{ formatUploadTime(m.deletedAt) }}</small></td>
               <td>{{ m.sourceBranch }}<br>{{ short(m.sourceCommit) }}</td><td :title="m.baselineId">{{ short(m.baselineId) }}<br>{{ short(m.gitCommit) }}</td>
               <td><a v-if="m.packageUrl.startsWith('https://')" :href="m.packageUrl" target="_blank" rel="noopener noreferrer">下载 {{ m.platform === 'ios' ? 'IPA' : 'APK' }}</a><br>{{ (m.packageSize / 1048576).toFixed(1) }} MiB</td>
@@ -119,23 +120,33 @@ async function activate(record, kind) {
         <div v-if="tab === '补丁发布'" class="card">
           <div class="baseline-tools"><p class="hint">按上传完成时间倒序，最新在前。时间按浏览器本地时区显示；历史记录使用服务端文件时间。</p><label class="deleted-toggle"><input v-model="includeDeletedPatches" type="checkbox" :disabled="busy" @change="refresh">显示已删除</label></div>
           <p class="hint">上传后需确认发布。已发布补丁须先撤回再删除；撤回需先上传本机签名的撤回清单。删除可恢复，不删除文件或回收编号；已撤回补丁不能重新发布。</p>
-          <div class="table-wrap"><table><thead><tr><th>补丁</th><th>App / 平台 / 版本</th><th>基线</th><th>上传完成时间</th><th>状态</th><th>操作</th></tr></thead><tbody>
+          <div class="table-wrap"><table><thead><tr><th>补丁</th><th>App / 平台 / 版本</th><th>基线</th><th>上传完成时间</th><th>状态</th><th>运行情况</th><th>操作</th></tr></thead><tbody>
             <tr v-for="r in records" :key="r.manifest.baselineId + r.manifest.patchId" :class="{'deleted-baseline': r.deletedAt}">
-              <td>{{ r.manifest.patchNumber ? `p${r.manifest.patchNumber}` : '旧版（无编号）' }}<br><small>{{ r.manifest.patchId }}</small></td><td>{{ r.manifest.identity.appId }} / {{ r.manifest.identity.platform }} / {{ r.manifest.identity.release }}</td>
+              <td>{{ r.manifest.patchNumber ? `p${r.manifest.patchNumber}` : '旧版（无编号）' }}<br><small>{{ r.manifest.patchId }}</small></td><td>{{ r.manifest.identity.appId }} / {{ r.manifest.identity.platform }} / {{ r.manifest.identity.abi }} / {{ r.manifest.identity.release }}</td>
               <td :title="r.manifest.baselineId">{{ short(r.manifest.baselineId) }}</td>
               <td class="upload-time" :title="r.uploadedAt">{{ formatUploadTime(r.uploadedAt) }}<small v-if="r.deletedAt">删除于 {{ formatUploadTime(r.deletedAt) }}</small></td>
               <td>{{ labels[r.status] }}<br><span v-if="r.deletedAt" class="deleted-badge">已删除</span></td>
+              <td class="runtime-cell"><details v-if="eventRows(events, r.manifest.baselineId, r.manifest.patchId).length">
+                <summary>{{ eventSummary(eventRows(events, r.manifest.baselineId, r.manifest.patchId)) }}</summary>
+                <p class="hint">服务端去重事件数，不代表用户数或成功率。</p>
+                <div v-for="event in eventRows(events, r.manifest.baselineId, r.manifest.patchId)" :key="event.event" :class="{ 'event-failure': ['startup_failed', 'download_failed', 'rejected'].includes(event.event) }">{{ event.label }}：{{ event.count }}</div>
+              </details><span v-else class="hint">暂无上报</span></td>
               <td class="actions"><template v-if="!r.deletedAt"><button :disabled="busy || r.status !== 'uploaded'" @click="activate(r, 'candidate')">发布</button><button class="danger" :disabled="busy || r.status !== 'published' || !r.withdrawalUploaded" @click="activate(r, 'withdrawal')">撤回</button><button class="danger" :disabled="busy || r.status === 'published'" :title="r.status === 'published' ? '请先撤回已发布补丁' : '可恢复地删除列表记录'" @click="managePatch(r, 'delete')">删除</button></template><button v-else :disabled="busy" @click="managePatch(r, 'restore')">恢复</button></td>
-            </tr><tr v-if="!records.length"><td colspan="6" class="empty">暂无补丁，请先上传或勾选“显示已删除”查看已移除记录。</td></tr>
+            </tr><tr v-if="!records.length"><td colspan="7" class="empty">暂无补丁，请先上传或勾选“显示已删除”查看已移除记录。</td></tr>
           </tbody></table></div>
         </div>
-        <div v-if="tab === '运行结果'" class="card"><p class="hint">服务端去重事件数，不代表独立用户数或成功率。</p><div class="table-wrap"><table><thead><tr><th>基线 / 补丁 / 事件</th><th>数量</th></tr></thead><tbody><tr v-for="(count, key) in events" :key="key"><td>{{ key }}</td><td>{{ count }}</td></tr></tbody></table></div></div>
+
       </section>
     </div>
   </div>
 </template>
 
 <style scoped>
+.runtime-cell { min-width: 210px; max-width: 340px; }
+.runtime-cell summary { cursor: pointer; line-height: 1.7; }
+.event-failure { color: #b42318; }
+.baseline-health { color: #687383; }
+
 .baseline-tools { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .baseline-tools .hint { flex: 1; margin: 0; min-width: 240px; }
 .deleted-toggle { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 13px; }

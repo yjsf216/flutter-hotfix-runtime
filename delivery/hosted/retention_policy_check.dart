@@ -220,6 +220,21 @@ Future<void> main() async {
     );
     final restarted = RetentionPolicy(root, admin, upload);
     check(restarted.retired(a), 'disable/restart resurrected old baseline');
+    final abiRoot = Directory('${root.path}/abi-isolation');
+    final abiPolicy = RetentionPolicy(abiRoot, admin, upload, clock: () => now);
+    for (var i = 0; i < 3; i++) {
+      final id = '${i + 6}' * 64;
+      final file = File('${abiRoot.path}/baselines/$id.json');
+      file.parent.createSync(recursive: true);
+      file.writeAsStringSync(jsonEncode({
+        'baselineId': id, 'appId': 'example.app', 'platform': 'android',
+        'abi': i == 2 ? 'arm' : 'arm64', 'release': '1.0.0+1',
+        'packageUrl': 'https://cdn.example.invalid/$id',
+        'registeredAt': now.add(Duration(seconds: i)).toIso8601String(),
+      }));
+      abiPolicy.register(id, 'main');
+    }
+    check(abiPolicy.plan().isEmpty, 'ARM32 upload displaced an ARM64 baseline');
     print(
       'PASS: default-off retention, group isolation, leases, durable retirement, shared blobs, cleanup failure, HTTP denial and legacy preservation',
     );
