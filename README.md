@@ -7,8 +7,10 @@ Android/iOS 的有限真机验证及在线补丁闭环已完成；**不是生产
 
 ## Start here
 
+- 维护入口：[项目结构、配置归属与拆分状态](PROJECT_LAYOUT.md)。先区分 App 运行时、构建工具和服务端，再选择对应文档。
 - 图形化操作：[独立管理后台](console/README.md)：选择基础版本和 Git 提交，生成、发布、撤回补丁并查看结果；自带页面和本机执行器，**不依赖 Jenkins**。
 - 首次使用：[五步流程](GETTING_STARTED.md)：`doctor → init → console`，然后在网页构建基线、生成并发布补丁。缺少工具先看[安装引导](TOOLCHAIN_SETUP.md)。自定义工程见[手动接入与排错](MANUAL_INTEGRATION.md)。
+- iOS 同一工作流：[签名、初始化与 IPA 使用指南](IOS_GETTING_STARTED.md)。使用 `init --platform ios`，后台构建、补丁、发布、结果和撤回与 Android 共用。
 - 中文入口：[接入、配置与日常发布流程](GIT_WORKFLOW.md)。说明配置文件、
   代码位置、本地补丁服务与正式部署的区别，示例不依赖具体业务项目。
 - New: [project CLI and independent order repair example](examples/order_app/README.md).
@@ -46,6 +48,15 @@ authenticated upload/filesystem storage, app check/download, next-start activati
 and result reporting. See [Android/iOS online evidence](delivery/EVIDENCE.md).
 
 ## Current status
+
+### Runtime extraction transition
+
+App 侧代码已提取到独立的 `flutter-patch-runtime` 仓库（Dart 包名 `patch_runtime`）。
+它包含运行时、必要原生存储和固定的 `dynamic_modules` 接口，不包含编译器或后台。
+已完成独立仓库推送及 App 固定 Git 提交的依赖解析验证；拆分后新基础包的真机验收尚未完成。
+本仓库通用 `init` 仍生成旧 `patch_ir_spike` 接入；不要在已迁移 App 上重复运行它。
+旧实验目录和原生源码仍用于冻结基线兼容与回归测试，暂不搬迁或删除。
+详见[迁移边界与提交顺序](PROJECT_LAYOUT.md#提交顺序与未完成事项)。
 
 | Area | Status | Evidence required to advance |
 |---|---|---|

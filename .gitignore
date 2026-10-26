@@ -2,6 +2,8 @@
 /console/web/node_modules/
 /work/
 .DS_Store
+.idea/
+*.iml
 **/.dart_tool/
 **/__pycache__/
 **/build/

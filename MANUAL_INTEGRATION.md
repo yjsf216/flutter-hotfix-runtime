@@ -274,7 +274,7 @@ Future<void> main(List<String> args) async {
 
 若工程已有网络安全配置，合并测试规则，不要直接覆盖原策略。正式 HTTPS flavor 不应带此测试例外。
 
-在 App 根目录创建 `hotfix.android.json`，确保版本与 `pubspec.yaml`、包名与 Gradle 实际配置一致：
+在 App 根目录创建 `hotfix.android.json`。包名和渠道由 Gradle 读取；底层命令的版本须与 `pubspec.yaml` 一致：
 
 ```json
 {
@@ -282,9 +282,7 @@ Future<void> main(List<String> args) async {
   "entry": "lib/main_hotfix.dart",
   "patchScope": "lib",
   "platform": "android",
-  "appId": "com.example.hotfix_demo",
   "release": "1.0.0+1",
-  "androidFlavor": "hotfix",
   "dartDefines": {},
   "updateOrigin": "http://127.0.0.1:18091",
   "allowDevelopmentHttp": true

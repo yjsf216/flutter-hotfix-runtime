@@ -51,26 +51,24 @@
 | `project` | 相对配置文件所在目录的 App 工程路径；Git 工作流要求它是仓库根目录 |
 | `entry` | `lib/` 下的定制 Dart 启动入口 |
 | `platform` | 目标平台；`release-android` 要求 `android` |
-| `appId` | 应用包名，必须与实际 APK 一致 |
+| `appId` | 默认从选中的原生构建读取；显式填写时必须与实际安装包一致 |
 | `release` | `版本名+构建号`，必须与 `pubspec.yaml` 和 APK 一致 |
 | `patchScope` | `lib` 表示基线中实际编译到的现有业务 Dart 库；兼容性仍需检查 |
 | `patchLibrary` | 旧单库模式的可选配置；多文件模式通常省略 |
-| `androidFlavor` | 工程中已经定义的 Android flavor；统一 APK 入口要求显式填写 |
+| `native` | 可选覆盖项；Android 支持 `flavor`，iOS 支持 `team`、`scheme`、`minimumVersion`、`infoPlist`。默认读取 Gradle/Xcode；多候选无法确定时停止 |
 | `dartDefines` | 可选的字符串键值表，传给编译器；必须与业务实际需要的编译参数一致，禁止覆盖保留键 |
 | `updateOrigin` | App 检查、下载及上报所用的服务 origin；留空不发起更新请求 |
 | `allowDevelopmentHttp` | 默认不允许 HTTP；仅本地测试时显式开启，正式配置使用 HTTPS |
 
-通用 Android 配置示例（需替换包名、版本、flavor 和域名，示例不是已部署服务）：
+通用 Android 配置示例（底层命令需填写版本；简化入口自动读取 pubspec，示例不是已部署服务）：
 
 ```json
 {
   "project": ".",
   "entry": "lib/main_hotfix.dart",
   "platform": "android",
-  "appId": "com.example.app",
   "release": "1.0.0+1",
   "patchScope": "lib",
-  "androidFlavor": "production",
   "dartDefines": {},
   "updateOrigin": "https://patches.example.com",
   "allowDevelopmentHttp": false
@@ -138,8 +136,10 @@ appropriate `JAVA_HOME`. `DART_SDK_SOURCE` defaults to `work/upstream/dart-sdk`.
 Keep the same checkout, dependencies and pinned toolchain for patch builds.
 Do not run other builds concurrently in that checkout.
 
-The committed config must include `androidFlavor`, `dartDefines`, and a `release`
-matching `pubspec.yaml`. Configure `updateOrigin` before building A: HTTPS for
+Native options and app ID are read from the selected Gradle/Xcode build. Ambiguous
+selection requires an explicit `native` override; legacy flat options remain readable.
+The low-level release command requires a `release` matching `pubspec.yaml`; the App
+shortcut derives it automatically. Configure `updateOrigin` before building A: HTTPS for
 real deployments, or loopback HTTP plus explicit `allowDevelopmentHttp: true`
 only for USB/local tests. The endpoint cannot be changed in an installed A by
 editing the build machine's config.

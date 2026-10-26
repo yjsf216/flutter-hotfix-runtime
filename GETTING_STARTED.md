@@ -1,5 +1,10 @@
 # Android 热更新：五步开始使用
 
+> 本文 `init` 仍是原仓库接入流程。已切换独立 `patch_runtime` 的 App 不应重新运行旧 `init`；
+> 当前迁移边界见 [PROJECT_LAYOUT.md](PROJECT_LAYOUT.md)。
+
+iOS 使用同一套后台和简化命令，初始化与签名步骤见 [iOS 使用指南](IOS_GETTING_STARTED.md)。
+
 默认使用自带网页后台和内置构建执行器，无需 Jenkins、数据库或前端开发环境。
 也可使用命令行，底层构建、签名和分发能力完全相同。
 
@@ -11,7 +16,8 @@ sh /path/to/flutter-hotfix-runtime/tool/hotfix doctor --guide
 
 缺什么会一次列出，并给出安装指引。首次使用按[工具链准备](TOOLCHAIN_SETUP.md)配置
 固定 Flutter 3.41.9、匹配的 Dart 源码、定制 Android arm64 DDM Engine、Android SDK 和 JDK。
-定制 Engine 目前需源码构建，尚无一键下载包。后台随仓库提供预构建页面。
+`patch_runtime` 0.2.0 起随 Git 包提供配套 Android/iOS arm64 Release Engine，Pub 拉取后自动校验使用；
+不支持的宿主/目标组合仍需源码构建。Dart 补丁编译工具链另行准备。后台随仓库提供预构建页面。
 
 ## 2. 初始化 App
 
@@ -24,6 +30,20 @@ sh /path/to/flutter-hotfix-runtime/tool/hotfix init
 填写工具路径和补丁服务地址。标准 FlutterActivity 工程会生成接入配置、启动入口、
 签名密钥及项目入口 `./.hotfix/run`；原文件先备份。审查改动、测试并自行提交接入代码。
 先看修改计划可用 `init --dry-run`。
+
+`hotfix.android.json` 和 `hotfix.ios.json` 只需维护相同的公共字段：工程/入口、平台、补丁范围、
+业务 `dartDefines`、更新/编号/CDN 地址及网络策略。包名、Android 渠道、iOS 签名团队、Scheme、
+最低系统版本在打包时从 Gradle/Xcode 读取，不需要重复填写。版本号由简化入口读取 `pubspec.yaml`。
+Android 优先将显式 `APP_CHANNEL` 与真实 flavor 精确匹配；多个候选无法确定时会停止，要求
+填写可选的 `native.flavor` 或 `native.scheme`，不会默认选第一个。最终参数保存在归档的
+`resolved-config.json`，补丁使用冻结归档，不重新猜测原生参数。
+
+只检查自动解析结果（不打包、不签名、不发布）：
+
+```sh
+python3 /path/to/flutter-hotfix-runtime/tool/project_config.py hotfix.android.json
+python3 /path/to/flutter-hotfix-runtime/tool/project_config.py hotfix.ios.json
+```
 
 手机通过 Wi-Fi 测试时，直接指定电脑局域网地址：
 

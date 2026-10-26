@@ -1,6 +1,9 @@
 # Contributing
 
 This is an experimental Android/iOS hotfix runtime, not a drop-in production SDK.
+For directory ownership, runtime extraction status and commit boundaries, start
+with [PROJECT_LAYOUT.md](PROJECT_LAYOUT.md). Do not remove legacy compiler/runtime
+paths while frozen baselines or existing checks still depend on them.
 Please open an issue describing a reproducible problem or a bounded proposal
 before undertaking a major change. Never include signing keys, tokens, device
 identifiers, private application code or private logs in a public issue.

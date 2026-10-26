@@ -1,5 +1,10 @@
 # Architecture
 
+> 历史架构设计说明：下文包含目标态和早期协议草案，不是当前签名清单的复制模板。
+> 当前项目边界见 [PROJECT_LAYOUT.md](PROJECT_LAYOUT.md)；协议以
+> `signed_manifest.dart` 的字段/验签实现与回归测试为准（当前含 v1/v2）。
+> Android/iOS 只有有限验证，OHOS 仍延期；“三平台”描述不表示三个平台均已交付。
+
 ## Smallest system that can be safe
 
 ```text

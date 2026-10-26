@@ -9,8 +9,12 @@ sh /path/to/flutter-hotfix-runtime/tool/hotfix doctor --guide
 它一次汇总缺失组件、固定版本和 Android DDM 配置，失败返回退出码 1。
 `doctor --json` 提供机器可读结果。在已初始化的 App 目录运行，会读取该 App 保存的路径。
 
-当前完整验收宿主为 **macOS Apple Silicon**，目标为 **Android arm64**。
-使用后台无需 Node、数据库或 Jenkins。定制 Engine 尚无项目提供的预编译下载包，需源码构建。
+本页以 **macOS Apple Silicon → Android arm64** 的工具链准备为例。
+iOS arm64 的签名和构建要求见 [iOS 指南](IOS_GETTING_STARTED.md)及 [Engine 说明](engine/README.md)。
+使用后台无需 Node、数据库或 Jenkins。`patch_runtime` 0.2.0 起在插件仓库携带配套 Engine 制品；
+App 执行 `flutter pub get` 后，本工具从实际 Pub 包目录发现并校验它们，不要求固定个人目录。
+当前制品仅支持 macOS arm64 构建宿主和 Android/iOS arm64 Release；其他组合仍需另行构建验证。
+固定 Dart 编译器源码和依赖仍必需，不包含在 Engine 制品里。
 
 ## 1. 基础工具与 Flutter
 
@@ -43,6 +47,10 @@ build-tools 36.1.0 是 Engine 准备记录所用版本，APK 检查也已验证 
 其他 JDK/SDK 组合需自行验证 App 的 Gradle/AGP 兼容性。
 
 ## 3. 固定 Dart 源码与定制 Engine
+
+已采用插件内 Engine 的项目无需重复编译以下 Engine，但仍需准备本节的 Dart 编译工具链。
+`doctor`、App 构建/补丁入口及平台打包入口会校验 Engine 清单；旧版插件没有制品时继续使用原显式配置。
+冻结基线会核对快照生成器哈希，不能因为插件升级而绕过匹配检查。
 
 按 [Engine 源码准备记录](engine/README.md)准备独立源码树及固定依赖：
 

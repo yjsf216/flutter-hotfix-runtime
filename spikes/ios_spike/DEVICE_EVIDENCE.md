@@ -1,5 +1,62 @@
 # iOS device AOT/DBC3 verification
 
+## Management/Git business-app loop: 2026-10-14
+
+A real business Flutter application (not the standalone fixture) completed the
+management HTTP API → Git-selected baseline → development-signed IPA → later
+Git-selected two-file Dart patch → publish → LAN download → next cold-start
+activation → health report → signed withdrawal → baseline fallback loop on an
+authorized iPhone 15 running iOS 18.7.2. Flutter 3.41.9 and the matching custom
+iOS arm64 Release/AOT/DDM Engine were used. Existing business plugins and native
+channels were retained; strict signing and archive integrity checks passed.
+
+Only the initial baseline required installation. No uninstall, data clearing,
+patch-container injection or patch-time reinstall was performed. Persisted
+state confirmed the active/LKG patch and zero failures after activation. The
+business startup diagnostic confirmed a rasterized first frame, mounted
+navigation, no captured startup errors and completion of the update check.
+After withdrawal, active/LKG were null and the withdrawn patch was blacklisted;
+another healthy baseline event reached the delivery server.
+
+Private evidence: `work/ios-business-20261014/` contains baseline, downloaded,
+patched and withdrawn startup/state JSON. The private delivery server retains
+the corresponding received events. Business identifiers, signing material and
+device identities are intentionally not copied into public documentation.
+
+The two changed UI components also passed Widget tests against their Git
+revision. This was not an on-device screenshot comparison, browser click-through
+test, exhaustive business regression, or App Store distribution approval.
+
+## Revalidation: 2026-10-13
+
+An authorized iPhone 15 running iOS 18.7.2 passed the baseline, signed Widget
+DBC3 activation, cold restart, forged-signature fallback and wrong-baseline
+fallback cases. The native Release host was rebuilt with Xcode 26.5 using the
+existing custom Engine and frozen AOT App.framework. Automatic development
+signing registered this device; the user explicitly trusted the developer on
+the phone. Strict recursive code-signature verification passed.
+
+The old September manifest had expired. A new manifest was signed with the
+original test key and current validity dates; expiration checks were not
+disabled. The original baseline and bytecode digests below were reused. The
+valid case produced a new `PASS` result with active/LKG `p1`, null pending and
+zero failures both initially and after process termination/relaunch. Both
+negative cases produced `PASS` baseline with null active/LKG and empty digests,
+using current-dated manifests so expiration could not mask the tested failure.
+
+Private artifacts: `work/ios-current-validation/`, including `baseline-result.txt`,
+`first/`, `restart-complete/`, `invalid/` and `wrong/`. Only the dedicated
+`dev.hotfixruntime.ios-spike` app was installed and launched; no business app
+was replaced, and no app data was cleared.
+
+This revalidation transferred patch inputs through the development app
+container. It does **not** revalidate network delivery, the latest compiler on
+arbitrary application sources, management-console iOS integration, or App Store
+distribution. Those remain separate gates; this is not a production-support
+claim.
+
+## Initial verification: 2026-09-10
+
 Verified on authorized iPhone (iPhone 6s, iOS 15.8.7), USB UDID
 `IOS_DEVICE_UDID`, on 2026-09-10.
 Only `dev.hotfixruntime.ios-spike` was installed/launched. Personal Team
@@ -66,6 +123,6 @@ iOS arm64 cross compilation. `device_files.c` uses installed libimobiledevice
 for narrowly scoped USB app-container transfer; its `--self-check` accesses no
 device and checks the path boundary. Private test keys remain in ignored work.
 
-Remaining work includes remote delivery, production signing/policy review,
+Remaining work includes production remote deployment, signing/policy review,
 broader Dart semantics, performance, crash/fault coverage on iOS, and more devices.
 This finite matrix does not make the full hotfix runtime production-ready.

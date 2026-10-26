@@ -1,5 +1,8 @@
 # Delivery plan
 
+> 本文件保留分阶段研究计划和历史验收记录，不是当前待办清单。
+> 拆分过渡状态、配置规则和下一步提交顺序见 [PROJECT_LAYOUT.md](PROJECT_LAYOUT.md)。
+
 Every phase ends in a continue/stop decision. Passing source review or an emulator is not platform support.
 
 Current delivery priority: Android and iOS. OHOS is deferred at the user's request;

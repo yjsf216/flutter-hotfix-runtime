@@ -1,5 +1,18 @@
 # Online delivery: Android + iOS device evidence
 
+## Management/Git iOS revalidation: 2026-10-14
+
+The same online lifecycle has now passed in a real business application using
+the management HTTP API and Git-selected baseline/fix commits: build and verify
+the development-signed IPA, install the baseline once, compile two changed Dart
+functions without rebuilding the baseline, publish, download over LAN, activate
+on next cold startup, receive `patch_healthy`, withdraw with a signed manifest,
+then restart into the healthy baseline with the withdrawn patch blacklisted.
+No patch-time reinstall or USB patch injection was used. See the scoped
+[device evidence](../spikes/ios_spike/DEVICE_EVIDENCE.md).
+
+## Initial online loop: 2026-09-10
+
 On 2026-09-10 both authorized devices completed the minimum online loop using
 the actual custom Flutter Release/AOT/DDM Engine and shared signed loader.
 No patch file was manually placed in either app's inbox for these online tests.
@@ -48,3 +61,22 @@ The service used HTTP only for explicit development: Android via device-specific
 USB reverse forwarding, iOS via the development Mac's LAN address. HTTPS
 production deployment, App Store review, persistent telemetry retries, rollout,
 withdrawal and arbitrary-project integration are not claimed by this test.
+
+## Signed patch display numbers: 2026-10-20
+
+- `tool/patch_number_check.dart` verifies durable/idempotent reservations,
+  distinct concurrent numbers, upload-role isolation, v2 signed-number binding,
+  numbered upload/activation, and duplicate-number rejection.
+- The real signed loader is exercised for downloaded-but-not-active, loaded-but-
+  not-healthy, healthy, failed-candidate fallback, and withdrawn-to-bundled states.
+  The display number follows the healthy running patch, not the latest upload.
+- Existing v1 signature and delivery lifecycle regression checks still pass.
+- HTTPS deployment checks exercised the production reservation client through a
+  path-prefixed test API. A separate diagnostic ledger was used; no installed
+  application's patch numbers were consumed and no test patch was published.
+- A consuming application's actual settings widget test passed for no suffix,
+  `-p1`, `-p2`, fallback and cleared suffix, preserving its package version/build.
+
+These are protocol/component and build checks, not new on-device acceptance.
+Numbering does not expand compiler compatibility: new/unretained libraries and
+unsupported structural changes still require a new baseline or compiler work.
