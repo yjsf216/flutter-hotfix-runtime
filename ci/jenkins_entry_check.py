@@ -10,6 +10,22 @@ import jenkins_entry as runner
 
 
 class RunnerCheck(unittest.TestCase):
+    def test_readable_labels_remain_safe_git_refs(self):
+        tag=runner.baseline_tag('ios','3.12.4+1082','fix(ui): 修复设置页 / 名称: 问题?[test]','a'*64)
+        self.assertIn('修复设置页',tag)
+        self.assertTrue(tag.endswith('a'*12))
+        subprocess.run(['git','check-ref-format','refs/tags/'+tag],check=True)
+        self.assertLess(len(runner.baseline_tag('android','1.0.0+1','很长的说明'*100,'a'*64)),70)
+
+    def test_short_labels_resolve_uniquely_and_keep_platform_checks(self):
+        identity='a'*64;rows={identity:{'platform':'ios'}}
+        tag=runner.baseline_tag('ios','1.0.0+1','修复名称',identity)
+        self.assertEqual(runner.resolve_baseline(tag,rows,'ios'),identity)
+        self.assertEqual(runner.resolve_baseline('hotfix-base-ios-'+identity,rows,'ios'),identity)
+        with self.assertRaises(ValueError):runner.resolve_baseline(tag,rows,'android')
+        rows['a'*12+'b'*52]={'platform':'ios'}
+        with self.assertRaises(ValueError):runner.resolve_baseline(tag,rows,'ios')
+
     def test_low_disk_stops_before_allocating_a_new_checkout(self):
         catalogue=unittest.mock.Mock();catalogue.root=Path('/unused')
         with patch.object(runner.shutil,'disk_usage',return_value=argparse.Namespace(free=0)):
@@ -22,7 +38,7 @@ class RunnerCheck(unittest.TestCase):
             root=Path(temp);cat=runner.Catalogue(root/'data');directory=cat.allocate()
             pinned=root/'old-tools/ci/jenkins_entry.py';pinned.parent.mkdir(parents=True);pinned.write_text('# fixture')
             identity='b'*64
-            runner.save(cat.index,{identity:{'archive':str(directory/'archive')}})
+            runner.save(cat.index,{identity:{'archive':str(directory/'archive'),'platform':'android'}})
             runner.save(directory/'ci-build.json',{'toolsRoot':str(pinned.parent.parent)})
             token=root/'token';token.write_text('x'*24)
             config=root/'config.json';runner.save(config,{'environment':{},'dataRoot':str(cat.root),

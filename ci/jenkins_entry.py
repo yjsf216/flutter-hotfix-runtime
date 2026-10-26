@@ -29,6 +29,27 @@ def commit(source, ref):
     return run(['git', 'rev-parse', '--verify', '--end-of-options', ref + '^{commit}'], source, True).strip()
 
 
+def baseline_tag(platform, release, subject, identity):
+    require(platform in ('android', 'ios') and re.fullmatch(r'[a-f0-9]{64}', identity), 'Invalid baseline identity')
+    require(re.fullmatch(r'[A-Za-z0-9.+_-]+', release) and '..' not in release, 'Invalid release label')
+    subject = re.sub(r'^[A-Za-z]+(?:\([^)]*\))?!?:\s*', '', subject.strip())
+    subject = re.sub(r'[^\w-]+', '_', subject).strip('_-') or '无提交说明'
+    if len(subject) > 24:
+        subject = subject[:24] + '…'
+    name = 'Android' if platform == 'android' else 'iOS'
+    return f'基线·{name}·{release}·{subject}·{identity[:12]}'
+
+
+def resolve_baseline(selection, rows, platform):
+    match = re.search(r'(?:^|[·-])([a-f0-9]{12}|[a-f0-9]{64})$', selection)
+    require(match is not None, 'Select a completed baseline first')
+    matches = [identity for identity in rows if identity.startswith(match[1])]
+    require(len(matches) == 1, 'Baseline is missing or its short identifier is ambiguous')
+    identity = matches[0]
+    require(rows[identity]['platform'] == platform, 'Selected baseline belongs to another platform')
+    return identity
+
+
 def source_directory(source, project, ref, cache_root=None):
     if cache_root is not None:
         remote = run(['git', 'remote', 'get-url', 'origin'], source, True).strip()
@@ -159,7 +180,8 @@ def baseline(args, config, catalogue, source, ref):
     catalogue.record(archive, remote)
     # Dedicated tags expose baseline choices through Jenkins's existing Git
     # Parameter plugin. They never alter App branches or ordinary release tags.
-    tag = 'hotfix-base-' + args.platform + '-' + re.sub(r'[^A-Za-z0-9_.-]', '_', channel) + '-' + receipt['release'].replace('+', '_') + '-' + receipt['baselineId']
+    subject = run(['git', 'show', '-s', '--format=%s', ref], project, True).strip()
+    tag = baseline_tag(args.platform, receipt['release'], subject, receipt['baselineId'])
     if run(['git', 'tag', '--list', tag], project, True).strip():
         require(run(['git', 'rev-parse', 'refs/tags/' + tag], project, True).strip() == ref, 'Baseline tag differs')
     else:
@@ -219,9 +241,7 @@ def main():
     require(re.fullmatch(r'[A-Za-z0-9_./-]{1,200}', args.branch), 'Invalid source branch name')
     catalogue = Catalogue(config['dataRoot'])
     if args.mode == 'patch':
-        match = re.search(r'([a-f0-9]{64})$', args.baseline_id)
-        require(match, 'Select a completed baseline first')
-        args.baseline_id = match[1]
+        args.baseline_id = resolve_baseline(args.baseline_id, catalogue.rows(), args.platform)
         row = catalogue.rows().get(args.baseline_id)
         require(row is not None, 'Selected baseline is not available on this node')
         directory = catalogue.owned(Path(row['archive']))

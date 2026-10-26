@@ -5,13 +5,16 @@
 
 `jenkins_entry.py` 提供实际的基础包构建上传及补丁构建上传入口，配置文件由 CI 节点私有目录提供。
 任务检出完整 App SHA，在专用目录构建并保存归档；补丁只使用对应冻结归档，不运行依赖升级。
-成功基础包会创建 `hotfix-base-` 前缀的独立 Git 标签，供现有 Git Parameter 插件列出候选。
+成功基础包会创建 `基线·平台·版本·提交说明·短标识` 格式的独立 Git 标签，供 Git Parameter 插件列出候选。
+提交说明取基线提交的首行，去除 Conventional Commit 前缀并最多保留 24 个字符。
+短标识使用基线 ID 前 12 位；构建时必须唯一匹配本机完整记录，并核对平台。
+已有完整 ID 和旧式 `hotfix-base-` 标签仍可通过 API 使用。
 选择后仍会核对本地归档、平台和服务端维护状态，不能用同名版本或已退役标签替代。
 
 ## Jenkins 使用流程
 
 专用任务需要配置 App Git SCM，分支参数使用 Git Parameter 的 `PT_BRANCH`，
-基础包参数使用 `PT_TAG`，过滤条件为 `hotfix-base-*`。任务禁止并发构建。
+基础包参数使用 `PT_TAG`，过滤条件为 `基线·*`。任务禁止并发构建。
 
 1. 构建基础包：`BUILD_MODE=baseline`，选择 `platform` 和 App 的 `BRANCH`。
    此时忽略 `BASELINE_ID`。成功后管理网站显示安装包，Mini 留存完整编译归档。
