@@ -20,12 +20,17 @@
 
 选择一个独立的 CI 数据目录，不使用普通 Jenkins workspace、用户主目录或 SDK 目录。
 运行 `ci_baselines.py allocate --root <专用目录>` 分配唯一 build 目录；它带 `.ci-owned.json` 标记。
-在其 `project/` 子目录创建独立 Git 克隆，完整基础包输出必须位于该 build 目录的 `archive/`。
+在其 `project/` 子目录创建独立 Git worktree，完整基础包输出必须位于该 build 目录的 `archive/`。
+所有新基线共享 `git-cache/` 中按远程地址区分的裸仓库，提交历史只存一份。
+缓存更新持有文件锁；源码、依赖配置和编译输出仍各自隔离，不切换普通 App 工作区。
+已有独立克隆继续兼容，不搬动已有冻结归档。缓存不自动清理，以免破坏保留中的 worktree。
+Flutter、Dart 编译器和 Engine 使用节点专用工具目录及同一 Pub 缓存，不为每个基线复制工具链。
 冻结后不要搬动目录。私钥、SDK、Engine 源码、共享依赖缓存均放在此目录外。
 
 ```text
 CI 专用数据目录/
 ├── index.json
+├── git-cache/   # 共享 Git 对象；不要手工删除或执行 worktree prune
 └── builds/<随机 build ID>/
     ├── .ci-owned.json
     ├── project/     # 对应基线的稳定源码目录

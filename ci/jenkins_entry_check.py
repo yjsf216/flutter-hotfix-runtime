@@ -9,6 +9,27 @@ import jenkins_entry as runner
 
 
 class RunnerCheck(unittest.TestCase):
+    def test_shared_objects_with_isolated_worktrees(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); source = root/'source'; source.mkdir()
+            def git(*args): return subprocess.check_output(['git','-C',str(source),*args],text=True).strip()
+            git('init','-q');git('config','user.name','Fixture');git('config','user.email','fixture@example.invalid')
+            (source/'example').write_text('base')
+            git('add','.');git('commit','-qm','base');git('remote','add','origin','git@example.invalid:fixture/app.git')
+            first = git('rev-parse','HEAD')
+            a=root/'a/project';b=root/'b/project';cache=root/'cache'
+            runner.source_directory(source,a,first,cache)
+            (source/'example').write_text('fix');git('commit','-qam','fix');second=git('rev-parse','HEAD')
+            runner.source_directory(source,b,second,cache)
+            def common(p): return subprocess.check_output(['git','-C',str(p),'rev-parse','--git-common-dir'],text=True).strip()
+            self.assertEqual(common(a),common(b))
+            self.assertEqual((a/'example').read_text(),'base')
+            self.assertEqual((b/'example').read_text(),'fix')
+            self.assertEqual(git('rev-parse','HEAD'),second)
+            (a/'example').write_text('pending')
+            with self.assertRaises(ValueError): runner.source_directory(source,a,second,cache)
+            self.assertEqual((a/'example').read_text(),'pending')
+
     def test_commit_input_never_becomes_a_git_option(self):
         with patch.object(runner, 'run', side_effect=AssertionError('spawned')):
             for value in ['--help', 'origin/develop', 'a'*40+';echo bad']:

@@ -1,5 +1,7 @@
 """Dedicated Jenkins base/patch runner; all source changes stay in CI-owned clones."""
 import argparse
+import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -26,7 +28,34 @@ def commit(source, ref):
     return run(['git', 'rev-parse', '--verify', '--end-of-options', ref + '^{commit}'], source, True).strip()
 
 
-def source_directory(source, project, ref):
+def source_directory(source, project, ref, cache_root=None):
+    if cache_root is not None:
+        remote = run(['git', 'remote', 'get-url', 'origin'], source, True).strip()
+        require(remote.startswith(('git@', 'https://')), 'Source must have its real Git remote')
+        uri = urlsplit(remote)
+        require(not uri.username or remote.startswith('git@'), 'Do not persist credential-bearing repository URLs')
+        require(not uri.password, 'Do not persist credential-bearing repository URLs')
+        cache_root = Path(cache_root)
+        cache_root.mkdir(parents=True, exist_ok=True)
+        repository = cache_root / (hashlib.sha256(remote.encode()).hexdigest() + '.git')
+        with (cache_root / (repository.name + '.lock')).open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not repository.exists():
+                run(['git', 'init', '--bare', '--quiet', repository])
+                run(['git', '--git-dir', repository, 'remote', 'add', 'origin', remote])
+                run(['git', '--git-dir', repository, 'config', 'gc.auto', '0'])
+            # Keep every imported commit reachable while its baseline is retained.
+            run(['git', '--git-dir', repository, 'fetch', '--quiet', '--no-tags', source,
+                 ref + ':refs/hotfix/' + ref])
+            if not project.exists():
+                project.parent.mkdir(parents=True, exist_ok=True)
+                run(['git', '--git-dir', repository, 'worktree', 'add', '--quiet', '--detach', project, ref])
+            else:
+                head(project)
+                run(['git', 'fetch', '--quiet', '--no-tags', repository, ref], project)
+                run(['git', 'checkout', '--quiet', '--detach', ref], project)
+            require(head(project) == ref, 'Unexpected checkout commit')
+        return
     if not project.exists():
         run(['git', 'clone', '--quiet', '--no-hardlinks', '--no-checkout', source, project])
         remote = run(['git', 'remote', 'get-url', 'origin'], source, True).strip()
@@ -50,6 +79,8 @@ def environment(config, project, platform):
     failures = [c['name'] for c in toolchain.inspect(env) if not c['ok']]
     require(not failures, 'Missing toolchain inputs: ' + ', '.join(failures))
     env = {**os.environ, **env}
+    if env.get('ANDROID_SDK_ROOT'):
+        env['ANDROID_HOME'] = env['ANDROID_SDK_ROOT']
     env['HOTFIX_UPLOAD_TOKEN'] = Path(config['uploadTokenFile']).read_text().strip()
     env['HOTFIX_PUBLIC_KEY_FILE'] = str(Path(config['keys']) / 'public-key.txt')
     env['HOTFIX_MANIFEST_TTL_SECONDS'] = str(config.get('manifestTTLSeconds', 604800))
@@ -59,7 +90,7 @@ def environment(config, project, platform):
 def baseline(args, config, catalogue, source, ref):
     directory = catalogue.allocate()
     project = directory / 'project'
-    source_directory(source, project, ref)
+    source_directory(source, project, ref, Path(config['dataRoot']) / 'git-cache')
     # Resolve dependencies once for a new base. Patch tasks never run pub get.
     preliminary = {**os.environ, **config['environment']}
     sdk = Path(preliminary['FLUTTER_SDK'])
@@ -112,7 +143,7 @@ def patch_inner(args, config, catalogue, source, ref):
     require(read(directory / 'ci-build.json')['toolStamp'] == tool_stamp(), 'Restore the baseline-matched build tools before patching')
     project = directory / 'project'
     require(Path(read(archive / 'baseline/project.json')['project']).resolve() == project, 'Baseline workspace moved')
-    source_directory(source, project, ref)
+    source_directory(source, project, ref, Path(config['dataRoot']) / 'git-cache')
     env = environment(config, project, args.platform)
     require(app_info(project, env)['version'] == receipt['release'], 'App version changed; build a new base')
     require(digest(Path(config['keys']) / 'public-key.txt') == receipt['publicKeySha256'], 'Signing key differs from baseline')
