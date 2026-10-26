@@ -85,9 +85,6 @@ def environment(config, project, platform):
     # Release Gradle's heap before the separate AOT compiler runs on small nodes.
     env['GRADLE_OPTS'] = env.get('GRADLE_OPTS', '') + ' -Dorg.gradle.daemon=false'
     env['HOTFIX_AOT_HEAP_MB'] = str(config.get('aotHeapMB', 3072))
-    if config.get('caBundle'):
-        require(Path(config['caBundle']).is_file(), 'CA bundle missing')
-        env['SSL_CERT_FILE'] = config['caBundle']
     env['HOTFIX_UPLOAD_TOKEN'] = Path(config['uploadTokenFile']).read_text().strip()
     env['HOTFIX_PUBLIC_KEY_FILE'] = str(Path(config['keys']) / 'public-key.txt')
     env['HOTFIX_MANIFEST_TTL_SECONDS'] = str(config.get('manifestTTLSeconds', 604800))
@@ -210,6 +207,9 @@ def main():
     parser.add_argument('--resume-directory', type=Path)
     args = parser.parse_args()
     config = read(args.config)
+    if config.get('caBundle'):
+        require(Path(config['caBundle']).is_file(), 'CA bundle missing')
+        os.environ['SSL_CERT_FILE'] = config['caBundle']
     source = args.source.resolve(); ref = commit(source, args.commit)
     require(re.fullmatch(r'[A-Za-z0-9_./-]{1,200}', args.branch), 'Invalid source branch name')
     catalogue = Catalogue(config['dataRoot'])
