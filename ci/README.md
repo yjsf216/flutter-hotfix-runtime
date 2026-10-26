@@ -8,6 +8,23 @@
 成功基础包会创建 `hotfix-base-` 前缀的独立 Git 标签，供现有 Git Parameter 插件列出候选。
 选择后仍会核对本地归档、平台和服务端维护状态，不能用同名版本或已退役标签替代。
 
+## Jenkins 使用流程
+
+专用任务需要配置 App Git SCM，分支参数使用 Git Parameter 的 `PT_BRANCH`，
+基础包参数使用 `PT_TAG`，过滤条件为 `hotfix-base-*`。任务禁止并发构建。
+
+1. 构建基础包：`BUILD_MODE=baseline`，选择 `platform` 和 App 的 `BRANCH`。
+   此时忽略 `BASELINE_ID`。成功后管理网站显示安装包，Mini 留存完整编译归档。
+2. 提交修复：在同一 App 版本上提交允许范围内的 Dart 修改。
+3. 构建补丁：`BUILD_MODE=patch`，选择修复分支，以及相同平台对应的 `BASELINE_ID` 标签。
+   服务端有记录但 Mini 没有对应归档时会拒绝构建。
+4. 构建成功后检查 Jenkins 的 `hotfix-result.json` 和管理网站的待发布补丁，再手动发布。
+   上传步骤同时准备已签名撤回清单；构建任务不会自动向用户发布。
+
+新基线要求 App 提交 `pubspec.lock`，Android 项目提交 Gradle wrapper。
+依赖解析启用 `--enforce-lockfile`，避免构建机继承的镜像设置意外升级依赖。
+节点初始化和环境检查由维护者完成，正常构建参数中无需 `CHECK_ONLY`。
+
 ## 当前状态
 
 - 同一 App / 平台 / 渠道维护最近两个**成功上传的基线**，不是按版本字符串比较。
