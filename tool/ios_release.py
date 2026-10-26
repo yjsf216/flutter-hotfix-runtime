@@ -99,7 +99,8 @@ def release(config_path, output):
     config = {**config, 'project': str(project)}
     config_path = output / 'resolved-config.json'
     write(config_path, config)
-    with open(project / '.git/hotfix-build.lock', 'a') as lock:
+    git_directory = Path(run(['git', 'rev-parse', '--absolute-git-dir'], project, True).strip())
+    with open(git_directory / 'hotfix-build.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         run([flutter / 'bin/flutter', 'build', 'ios', '--release', '--no-pub', '--no-codesign',
              '--target', config['entry'], '--build-name', version, '--build-number', code,

@@ -189,7 +189,8 @@ def release(config_path, output, resume=False):
     config_path = resolved_path if resolved_path.exists() else config_path
     env = {**os.environ, 'ORG_GRADLE_PROJECT_hotfixRuntime': 'true'}
     # Lock is scoped to this checkout. Other build entrypoints must not run concurrently.
-    with open(project / '.git/hotfix-build.lock', 'a') as lock:
+    git_directory = Path(run(['git', 'rev-parse', '--absolute-git-dir'], project, True).strip())
+    with open(git_directory / 'hotfix-build.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if not resume:
             run([flutter / 'bin/flutter', 'build', 'apk', '--release', '--no-pub',

@@ -93,8 +93,10 @@ def baseline(args, config, catalogue, source, ref):
     source_directory(source, project, ref, Path(config['dataRoot']) / 'git-cache')
     # Resolve dependencies once for a new base. Patch tasks never run pub get.
     preliminary = {**os.environ, **config['environment']}
+    # A different inherited mirror makes Pub re-resolve the committed lockfile.
+    preliminary['PUB_HOSTED_URL'] = 'https://pub.dev'
     sdk = Path(preliminary['FLUTTER_SDK'])
-    run([sdk / 'bin/flutter', 'pub', 'get'], project, env=preliminary)
+    run([sdk / 'bin/flutter', 'pub', 'get', '--enforce-lockfile'], project, env=preliminary)
     # Flutter regenerates desktop registrants during mobile pub get. Only these
     # generated, tracked files may be restored in our isolated clone.
     for path in ['macos/Flutter/GeneratedPluginRegistrant.swift',
