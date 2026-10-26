@@ -1,0 +1,7 @@
+name: hotfix_hosted_service
+publish_to: none
+environment:
+  sdk: ^3.11.0
+dependencies:
+  crypto: 3.0.6
+  pointycastle: 4.0.0

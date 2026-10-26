@@ -32,7 +32,8 @@ Future<void> main() async {
     final keys = '${temp.path}/keys';
     await sign(['keygen', keys]);
     final baseline = 'a' * 64;
-    final artifact = File('${temp.path}/patch')..writeAsBytesSync([1, 2, 3, 4]);
+    final artifact = File('${temp.path}/patch.bytecode')
+      ..writeAsBytesSync([1, 2, 3, 4]);
     final envelope = File('${temp.path}/manifest.json');
     await sign(['sign', keys, artifact.path, envelope.path, baseline]);
     final publicKeys = {
@@ -41,10 +42,16 @@ Future<void> main() async {
       ),
     };
     const token = 'test-only-publish-token-placeholder';
+    const uploadToken = 'test-only-upload-token-placeholder';
+    var storageUnavailable = false;
     service = DeliveryServer(
       Directory('${temp.path}/server'),
       token,
       publicKeys,
+      uploadToken: uploadToken,
+      storeArtifact: (_, __) async {
+        if (storageUnavailable) throw StateError('storage/CDN unavailable');
+      },
     );
     await service.start(port: 0);
     final origin = Uri.parse('http://127.0.0.1:${service.server!.port}');
@@ -73,14 +80,142 @@ Future<void> main() async {
       'authorization': 'Bearer $token',
       'content-type': 'application/json',
     };
+    final uploadHeaders = {
+      'authorization': 'Bearer $uploadToken',
+      'content-type': 'application/json',
+    };
+    storageUnavailable = true;
+    require(
+      (await network.post(
+            origin.resolve('/v1/uploads'),
+            headers: uploadHeaders,
+            body: body,
+          )).statusCode ==
+          500,
+      'failed external storage accepted an upload',
+    );
+    final emptyInventory = await network.get(
+      origin.resolve('/v1/uploads'),
+      headers: headers,
+    );
+    require(
+      (jsonDecode(emptyInventory.body) as List).isEmpty,
+      'failed external upload entered inventory',
+    );
+    storageUnavailable = false;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      require(
+        (await network.post(
+              origin.resolve('/v1/uploads'),
+              headers: uploadHeaders,
+              body: body,
+            )).statusCode ==
+            201,
+        'signed upload or idempotent retry failed',
+      );
+    }
+    require(
+      await updates.checkAndDownload() == 'no_update',
+      'upload unexpectedly published a patch',
+    );
+    final uploadCli = File.fromUri(
+      Platform.script,
+    ).parent.parent.parent.parent.uri.resolve('tool/upload_patch.py');
+    final cliResult = await Process.run(
+      'python3',
+      [
+        '-B',
+        uploadCli.toFilePath(),
+        origin.toString(),
+        temp.path,
+        '--dev-loopback',
+      ],
+      environment: {'HOTFIX_UPLOAD_TOKEN': uploadToken},
+    );
+    require(
+      cliResult.exitCode == 0,
+      'local upload CLI failed: ${cliResult.stderr}',
+    );
+    require(
+      await updates.checkAndDownload() == 'no_update',
+      'CLI upload unexpectedly published a patch',
+    );
     require(
       (await network.post(
             origin.resolve('/v1/releases'),
-            headers: headers,
+            headers: uploadHeaders,
             body: body,
           )).statusCode ==
+          401,
+      'upload credential published a patch',
+    );
+    final invalidStaging = jsonDecode(body) as Map<String, dynamic>;
+    invalidStaging['artifact'] = base64.encode([99]);
+    require(
+      (await network.post(
+            origin.resolve('/v1/uploads'),
+            headers: uploadHeaders,
+            body: jsonEncode(invalidStaging),
+          )).statusCode ==
+          422,
+      'upload accepted corrupt bytes',
+    );
+    final stagedManifest =
+        (jsonDecode(envelope.readAsStringSync()) as Map)['manifest'] as Map;
+    final activation = jsonEncode({
+      'baselineId': baseline,
+      'patchId': stagedManifest['patchId'],
+      'kind': 'candidate',
+    });
+    require(
+      (await network.get(
+            origin.resolve('/v1/uploads'),
+            headers: uploadHeaders,
+          )).statusCode ==
+          401,
+      'upload credential read management inventory',
+    );
+    final inventory = await network.get(
+      origin.resolve('/v1/uploads'),
+      headers: headers,
+    );
+    require(
+      inventory.statusCode == 200 &&
+          (jsonDecode(inventory.body) as List).single['status'] == 'uploaded',
+      'staged inventory missing',
+    );
+    require(
+      (await network.post(
+            origin.resolve('/v1/activate'),
+            headers: uploadHeaders,
+            body: activation,
+          )).statusCode ==
+          401,
+      'uploader activated a staged patch',
+    );
+    storageUnavailable = true;
+    require(
+      (await network.post(
+            origin.resolve('/v1/activate'),
+            headers: headers,
+            body: activation,
+          )).statusCode ==
+          500,
+      'CDN failure did not block publication',
+    );
+    require(
+      await updates.checkAndDownload() == 'no_update',
+      'failed publication changed release pointer',
+    );
+    storageUnavailable = false;
+    require(
+      (await network.post(
+            origin.resolve('/v1/activate'),
+            headers: headers,
+            body: activation,
+          )).statusCode ==
           201,
-      'signed publication failed',
+      'signed staged publication failed',
     );
     // Identical retry is idempotent; a modified payload fails authentication.
     require(
@@ -537,6 +672,95 @@ Future<void> main() async {
       await flaky.close(force: true);
     }
     print('PASS: interrupted HTTP body retried from scratch before staging');
+    // Hosted API prefixes must survive routing; bytes may come from a separate CDN.
+    final apiPaths = <String>[];
+    final cdnPaths = <String>[];
+    final prefixed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final cdn = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    prefixed.listen((request) async {
+      apiPaths.add(request.uri.path);
+      await request.drain<void>();
+      switch (request.uri.path) {
+        case '/public/hotfix-test/v1/withdrawals':
+          request.response.write('[]');
+        case '/public/hotfix-test/v1/check':
+          request.response.add(envelope.readAsBytesSync());
+        case '/public/hotfix-test/v1/reports':
+          request.response.statusCode = 202;
+        default:
+          request.response.statusCode = 404;
+      }
+      await request.response.close();
+    });
+    cdn.listen((request) async {
+      cdnPaths.add(request.uri.path);
+      request.response.add(artifact.readAsBytesSync());
+      await request.response.close();
+    });
+    final hostedLoader = SignedPatchLoader(
+      root: Directory('${temp.path}/hosted-client'),
+      verifier: verifier,
+    );
+    try {
+      for (final suffix in ['', '/']) {
+        final hosted = UpdateClient(
+          hostedLoader,
+          Uri.parse(
+            'http://127.0.0.1:${prefixed.port}/public/hotfix-test$suffix',
+          ),
+          artifactBase: Uri.parse(
+            'http://127.0.0.1:${cdn.port}/objects/v1/blobs/',
+          ),
+          allowDevelopmentHttp: true,
+        );
+        require(
+          await hosted.checkAndDownload() == 'downloaded',
+          'hosted download',
+        );
+        require(
+          await hosted.report('baseline_healthy', null),
+          'prefixed report',
+        );
+      }
+      require(
+        apiPaths.every((p) => p.startsWith('/public/hotfix-test/v1/')),
+        'API prefix lost',
+      );
+      require(
+        cdnPaths.length == 2 &&
+            cdnPaths.every(
+              (p) =>
+                  p ==
+                  '/objects/v1/blobs/${verifier.verify(envelope.readAsBytesSync())!.artifactSha256}',
+            ),
+        'artifact not fetched from configured CDN',
+      );
+      for (final invalid in [
+        'http://example.com/blobs/',
+        'https://user:secret@example.com/blobs/',
+        'https://example.com/blobs',
+        'https://example.com/blobs/?token=x',
+      ]) {
+        var rejected = false;
+        try {
+          UpdateClient(
+            hostedLoader,
+            Uri.parse('https://example.com/api'),
+            artifactBase: Uri.parse(invalid),
+          );
+        } on ArgumentError {
+          rejected = true;
+        }
+        require(rejected, 'unsafe CDN configuration accepted');
+      }
+    } finally {
+      hostedLoader.close();
+      await prefixed.close(force: true);
+      await cdn.close(force: true);
+    }
+    print(
+      'PASS: prefixed API and separate CDN preserve signed downloads and reports',
+    );
     print(
       'PASS: authenticated upload/storage -> check/download -> next boot -> health report',
     );
