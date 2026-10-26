@@ -79,7 +79,7 @@ def environment(config, project, platform):
     env = toolchain.discover(args, saved)
     failures = [c['name'] for c in toolchain.inspect(env) if not c['ok']]
     require(not failures, 'Missing toolchain inputs: ' + ', '.join(failures))
-    env = {**os.environ, **env}
+    env = {**os.environ, **saved, **env}
     if env.get('ANDROID_SDK_ROOT'):
         env['ANDROID_HOME'] = env['ANDROID_SDK_ROOT']
     # Release Gradle's heap before the separate AOT compiler runs on small nodes.
@@ -207,6 +207,7 @@ def main():
     parser.add_argument('--resume-directory', type=Path)
     args = parser.parse_args()
     config = read(args.config)
+    os.environ.update(config['environment'])
     if config.get('caBundle'):
         require(Path(config['caBundle']).is_file(), 'CA bundle missing')
         os.environ['SSL_CERT_FILE'] = config['caBundle']
