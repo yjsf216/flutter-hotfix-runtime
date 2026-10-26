@@ -4,6 +4,7 @@ import 'package:crypto/crypto.dart';
 import 'package:yaml/yaml.dart';
 import 'compile_dbc3_patch.dart' as compiler;
 import 'git_workflow.dart';
+import 'patch_numbers.dart';
 
 final repo = File.fromUri(Platform.script).parent.parent.parent.parent;
 String hash(File f) => sha256.convert(f.readAsBytesSync()).toString();
@@ -238,8 +239,17 @@ Future<void> command(List<String> args, {bool projectPatch = false}) async {
         defines['HOTFIX_TEST_PUBLIC_KEY']) {
       fail('signing key does not match the embedded baseline trust anchor');
     }
+    final numberingOrigin = metadata['patchNumberingOrigin'] as String?;
+    final number = numberingOrigin == null
+        ? null
+        : await reservePatchNumber(
+            numberingOrigin,
+            recipe['baselineId'] as String,
+            args[4],
+          );
     await run(Platform.resolvedExecutable, [
       '-DHOTFIX_APP_ID=${defines['HOTFIX_APP_ID']}',
+      if (number != null) '-DHOTFIX_PATCH_NUMBER=$number',
       '-DHOTFIX_PLATFORM=${metadata['platform']}',
       '-DHOTFIX_RELEASE=${metadata['release']}',
       '${repo.path}/spikes/patch_ir_spike/tool/signature_check.dart',
@@ -285,7 +295,14 @@ Future<void> command(List<String> args, {bool projectPatch = false}) async {
     fail('requires pinned Flutter 3.41.9 Engine');
   if (action == 'release') {
     final configFile = file(args[1]);
-    final config = json(configFile);
+    var config = json(configFile);
+    if (!config.containsKey('appId')) {
+      final resolved = await Process.run('python3', [
+        '${repo.path}/tool/project_config.py', configFile.path,
+      ]);
+      if (resolved.exitCode != 0) fail('Native configuration discovery failed; run project_config.py to diagnose');
+      config = jsonDecode(resolved.stdout as String) as Map<String, dynamic>;
+    }
     final project = Directory(
       Directory.fromUri(
         configFile.parent.uri.resolve(config['project'] as String),
@@ -361,6 +378,7 @@ Future<void> command(List<String> args, {bool projectPatch = false}) async {
         'HOTFIX_TEST_PUBLIC_KEY': publicKey,
         'HOTFIX_NATIVE_STORE': 'true',
         'HOTFIX_UPDATE_ORIGIN': config['updateOrigin'] as String? ?? '',
+        'HOTFIX_ARTIFACT_BASE': config['artifactBase'] as String? ?? '',
         'HOTFIX_ALLOW_DEV_HTTP': '${config['allowDevelopmentHttp'] == true}',
       },
     );

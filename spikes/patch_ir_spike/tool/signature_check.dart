@@ -17,6 +17,13 @@ void main(List<String> args) {
     final directory = Directory(args[1]);
     final artifact = File(args[2]).readAsBytesSync();
     final manifest = _manifest(artifact, DateTime.now().toUtc());
+    const numberText = String.fromEnvironment('HOTFIX_PATCH_NUMBER');
+    if (numberText.isNotEmpty) {
+      final number = int.parse(numberText);
+      if (number < 1 || number > 1000000) throw ArgumentError('patch number');
+      manifest['schemaVersion'] = 2;
+      manifest['patchNumber'] = number;
+    }
     if (args.length >= 5) manifest['baselineId'] = args[4];
     if (args.length == 6) manifest['patchId'] = args[5];
     File(args[3]).writeAsBytesSync(_sign(directory, manifest));

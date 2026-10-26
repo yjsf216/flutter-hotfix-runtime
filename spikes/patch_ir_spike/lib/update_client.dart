@@ -10,22 +10,43 @@ import 'signed_patch_loader.dart';
 /// Called after startup health, never from Widget.build or patch activation.
 /// Downloaded candidates enter the durable store but cannot change dispatch.
 class UpdateClient {
-  UpdateClient(this.loader, this.base, {this.allowDevelopmentHttp = false}) {
+  UpdateClient(
+    this.loader,
+    this.base, {
+    this.allowDevelopmentHttp = false,
+    this.artifactBase,
+  }) {
     if (base.host.isEmpty ||
         base.userInfo.isNotEmpty ||
         base.hasQuery ||
         base.hasFragment ||
-        base.path != '' && base.path != '/' ||
+        !RegExp(r'^(?:/[A-Za-z0-9_-]+)*/?$').hasMatch(base.path) ||
         base.scheme != 'https' &&
             !(allowDevelopmentHttp && base.scheme == 'http')) {
       throw ArgumentError('HTTPS service origin required');
+    }
+    final cdn = artifactBase;
+    if (cdn != null &&
+        (cdn.host.isEmpty ||
+            cdn.userInfo.isNotEmpty ||
+            cdn.hasQuery ||
+            cdn.hasFragment ||
+            !cdn.path.endsWith('/') ||
+            !RegExp(r'^(?:/[A-Za-z0-9_-]+)*/$').hasMatch(cdn.path) ||
+            cdn.scheme != 'https' &&
+                !(allowDevelopmentHttp && cdn.scheme == 'http'))) {
+      throw ArgumentError('Trusted HTTPS artifact directory required');
     }
   }
 
   final SignedPatchLoader loader;
   final Uri base;
+  final Uri? artifactBase;
   final bool allowDevelopmentHttp;
   final timeout = const Duration(seconds: 15);
+
+  Uri _endpoint(String path) =>
+      base.replace(path: base.path.replaceFirst(RegExp(r'/$'), '') + path);
 
   Future<Uint8List> _get(Uri uri, int limit) async {
     try {
@@ -86,13 +107,14 @@ class UpdateClient {
   Future<bool> _sendReport(Map<String, dynamic> event) async {
     final client = http.Client();
     try {
-      final request = http.Request('POST', base.resolve('/v1/reports'))
+      final request = http.Request('POST', _endpoint('/v1/reports'))
         ..followRedirects = false
         ..headers['content-type'] = 'application/json'
         ..body = jsonEncode(event);
       final response = await client.send(request).timeout(timeout);
       return response.statusCode == 202;
-    } on Object {
+    } on Object catch (error) {
+      print('HotfixDelivery report unavailable: $error');
       return false;
     } finally {
       client.close();
@@ -106,11 +128,9 @@ class UpdateClient {
       final withdrawals = jsonDecode(
         utf8.decode(
           await _get(
-            base
-                .resolve('/v1/withdrawals')
-                .replace(
-                  queryParameters: {'baselineId': loader.verifier.baselineId},
-                ),
+            _endpoint('/v1/withdrawals').replace(
+              queryParameters: {'baselineId': loader.verifier.baselineId},
+            ),
             128 * 1024,
           ),
         ),
@@ -125,11 +145,9 @@ class UpdateClient {
         }
       }
       final envelope = await _get(
-        base
-            .resolve('/v1/check')
-            .replace(
-              queryParameters: {'baselineId': loader.verifier.baselineId},
-            ),
+        _endpoint(
+          '/v1/check',
+        ).replace(queryParameters: {'baselineId': loader.verifier.baselineId}),
         maxManifestBytes,
       );
       if (utf8.decode(envelope) == 'null') return 'no_update';
@@ -148,7 +166,8 @@ class UpdateClient {
       if (candidate == runningPatchId) return 'current';
       // Artifact location is derived from authenticated content, not a remote URL.
       final bytes = await _get(
-        base.resolve('/v1/blobs/${manifest.artifactSha256}'),
+        artifactBase?.resolve(manifest.artifactSha256) ??
+            _endpoint('/v1/blobs/${manifest.artifactSha256}'),
         manifest.artifactSize,
       );
       if (!loader.stageBytes(envelope, bytes)) {
@@ -157,7 +176,8 @@ class UpdateClient {
       }
       await report('downloaded', candidate);
       return 'downloaded';
-    } on Object {
+    } on Object catch (error) {
+      print('HotfixDelivery download unavailable: $error');
       await report('download_failed', candidate);
       return 'download_failed';
     }

@@ -17,7 +17,11 @@ typedef PatchFunction = Object? Function(Object? receiver, List<Object?> args);
 String baselinePatchIds = '';
 String baselineBuildId = '';
 Map<String, Function> _active = const {};
-late SignedPatchLoader _loader;
+SignedPatchLoader? _loader;
+
+/// Only a patch that passed this boot's health checkpoint has a display number.
+int? get currentPatchNumber =>
+    _active.isEmpty ? null : _loader?.currentPatchNumber;
 
 // Replaced in baseline Kernel with per-FunctionId ABI type checks. The default
 // rejects every export, including otherwise callable generic functions.
@@ -51,8 +55,8 @@ Future<LoadedPatch<void>?> bootSignedModule(List<String> paths) async {
         },
       ),
     );
-    _loader.stage(paths[1], paths[0]);
-    return await _loader.load<void>((bytes) async {
+    _loader!.stage(paths[1], paths[0]);
+    return await _loader!.load<void>((bytes) async {
       activateModule(await loadModuleFromBytes(bytes));
     }, restoreBaseline: deactivateModule);
   } on Object catch (error) {
@@ -62,15 +66,18 @@ Future<LoadedPatch<void>?> bootSignedModule(List<String> paths) async {
   }
 }
 
-bool commitModuleHealth(LoadedPatch<void> patch) => _loader.markHealthy(patch);
+bool commitModuleHealth(LoadedPatch<void> patch) =>
+    _loader?.markHealthy(patch) ?? false;
 
 Future<void> checkUpdatesAfterHealth(LoadedPatch<void>? patch) async {
   const origin = String.fromEnvironment('HOTFIX_UPDATE_ORIGIN');
+  const artifacts = String.fromEnvironment('HOTFIX_ARTIFACT_BASE');
   if (origin.isEmpty) return;
   try {
     final delivery = UpdateClient(
-      _loader,
+      _loader!,
       Uri.parse(origin),
+      artifactBase: artifacts.isEmpty ? null : Uri.parse(artifacts),
       allowDevelopmentHttp: const bool.fromEnvironment('HOTFIX_ALLOW_DEV_HTTP'),
     );
     await delivery.report(

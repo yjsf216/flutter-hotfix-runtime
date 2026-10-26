@@ -7,11 +7,12 @@ import 'signed_manifest.dart';
 
 /// A completed load operation, not an automatically healthy/committed boot.
 final class LoadedPatch<T> {
-  LoadedPatch._(this._owner, this._attempt, this.value);
+  LoadedPatch._(this._owner, this._attempt, this.value, this.patchNumber);
 
   final SignedPatchLoader _owner;
   final PatchBootAttempt _attempt;
   String get patchId => _attempt.patchId;
+  final int? patchNumber;
   final T value;
 }
 
@@ -32,23 +33,33 @@ final class SignedPatchLoader {
   final SignedManifestVerifier verifier;
   late final PatchStore store;
   var _loadGeneration = 0;
+  final _verifiedManifests = <String, VerifiedManifest>{};
+  int? _currentPatchNumber;
+  int? get currentPatchNumber => _currentPatchNumber;
   void close() {
+    _currentPatchNumber = null;
     _loadGeneration++;
     store.close();
   }
 
   bool _verifyStored(String patchId, Uint8List envelope, Uint8List artifact) {
     final verified = verifier.verify(envelope);
-    return verified != null &&
+    final valid =
+        verified != null &&
         verified.patchId == patchId &&
         verified.matchesArtifact(artifact);
+    if (valid) _verifiedManifests[patchId] = verified;
+    return valid;
   }
 
   bool _verifyHealthy(String patchId, Uint8List envelope, Uint8List artifact) {
     final verified = verifier.verify(envelope, allowExpiredHealthy: true);
-    return verified != null &&
+    final valid =
+        verified != null &&
         verified.patchId == patchId &&
         verified.matchesArtifact(artifact);
+    if (valid) _verifiedManifests[patchId] = verified;
+    return valid;
   }
 
   bool stage(String manifestPath, String modulePath) {
@@ -113,6 +124,8 @@ final class SignedPatchLoader {
     required void Function() restoreBaseline,
   }) async {
     final generation = ++_loadGeneration;
+    _currentPatchNumber = null;
+    _verifiedManifests.clear();
     var attempt = store.beginBootAttempt();
     final incomplete = store.previousIncompleteBoot;
     if (incomplete != null)
@@ -127,7 +140,12 @@ final class SignedPatchLoader {
         if (bytes == null)
           throw StateError('selected patch failed revalidation');
         final value = await loadAndValidate(bytes);
-        return LoadedPatch._(this, attempt, value);
+        return LoadedPatch._(
+          this,
+          attempt,
+          value,
+          _verifiedManifests[attempt.patchId]?.patchNumber,
+        );
       } on Object {
         // An older callback must not clear a later load's active dispatch.
         if (generation != _loadGeneration) return null;
@@ -152,8 +170,13 @@ final class SignedPatchLoader {
 
   /// Call after activation and the application's health checkpoint, not merely
   /// because a bytecode entrypoint returned. Foreign loader results are rejected.
-  bool markHealthy<T>(LoadedPatch<T> patch) =>
-      identical(patch._owner, this) && store.markBootHealthy(patch._attempt);
+  bool markHealthy<T>(LoadedPatch<T> patch) {
+    if (!identical(patch._owner, this) ||
+        !store.markBootHealthy(patch._attempt))
+      return false;
+    _currentPatchNumber = patch.patchNumber;
+    return true;
+  }
 }
 
 Uint8List? _readBounded(String path, int limit) {

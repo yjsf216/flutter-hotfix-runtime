@@ -72,6 +72,7 @@ Uint8List canonicalManifestBytes(Object? value) {
 final class VerifiedManifest {
   VerifiedManifest._(Map<String, Object?> manifest)
     : patchId = manifest['patchId'] as String,
+      patchNumber = manifest['patchNumber'] as int?,
       baselineId = manifest['baselineId'] as String,
       artifactSha256 = manifest['artifactSha256'] as String,
       artifactSize = manifest['artifactSize'] as int,
@@ -81,6 +82,9 @@ final class VerifiedManifest {
       identity = Map.unmodifiable(manifest['identity'] as Map<String, Object?>);
 
   final String patchId;
+
+  /// Null for legacy v1 manifests. v2 numbers are covered by the signature.
+  final int? patchNumber;
   final String baselineId;
   final String artifactSha256;
   final int artifactSize;
@@ -161,8 +165,13 @@ final class SignedManifestVerifier {
       final manifest = envelope['manifest'];
       final signatureText = envelope['signature'];
       if (manifest is! Map<String, Object?> ||
-          !_hasKeys(manifest, _manifestFields) ||
-          manifest['schemaVersion'] != 1 ||
+          !(manifest['schemaVersion'] == 1 &&
+                  _hasKeys(manifest, _manifestFields) ||
+              manifest['schemaVersion'] == 2 &&
+                  _hasKeys(manifest, {..._manifestFields, 'patchNumber'}) &&
+                  manifest['patchNumber'] is int &&
+                  (manifest['patchNumber'] as int) > 0 &&
+                  (manifest['patchNumber'] as int) <= 1000000) ||
           manifest['signatureAlgorithm'] != signatureAlgorithm ||
           signatureText is! String ||
           signatureText.length > 96) {
