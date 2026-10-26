@@ -9,6 +9,18 @@ import jenkins_entry as runner
 
 
 class RunnerCheck(unittest.TestCase):
+    def test_cache_cleanup_keeps_archive_and_refuses_symlinks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);project=root/'project';project.mkdir()
+            subprocess.run(['git','init','-q',str(project)],check=True)
+            archive=root/'archive';archive.mkdir();(archive/'app.apk').write_bytes(b'keep')
+            (project/'build').mkdir();(project/'build/output').write_bytes(b'cache')
+            runner.trim_build_cache(project)
+            self.assertEqual((archive/'app.apk').read_bytes(),b'keep')
+            (project/'build').symlink_to(archive,target_is_directory=True)
+            with self.assertRaises(ValueError):runner.trim_build_cache(project)
+            self.assertTrue((archive/'app.apk').exists())
+
     def test_shared_objects_with_isolated_worktrees(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve(); source = root/'source'; source.mkdir()

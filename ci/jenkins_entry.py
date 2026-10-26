@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 from urllib.parse import urlsplit
@@ -87,6 +88,16 @@ def environment(config, project, platform):
     return env
 
 
+def trim_build_cache(project):
+    """Only disposable output in our owned checkout; frozen archives stay intact."""
+    build = project / 'build'
+    require(not build.is_symlink(), 'Refuse linked build cache')
+    require(not run(['git', 'ls-files', '--', 'build'], project, True).strip(),
+            'Refuse to remove tracked build files')
+    if build.is_dir():
+        shutil.rmtree(build)
+
+
 def baseline(args, config, catalogue, source, ref):
     directory = catalogue.allocate()
     project = directory / 'project'
@@ -132,6 +143,7 @@ def baseline(args, config, catalogue, source, ref):
     tag = 'hotfix-base-' + args.platform + '-' + re.sub(r'[^A-Za-z0-9_.-]', '_', channel) + '-' + receipt['release'].replace('+', '_') + '-' + receipt['baselineId']
     run(['git', 'tag', tag, ref], project)
     run(['git', 'push', 'origin', 'refs/tags/' + tag], project)
+    trim_build_cache(project)
     return {'kind': 'baseline', 'baselineId': receipt['baselineId'], 'release': receipt['release'],
             'platform': args.platform, 'channel': channel, 'sourceCommit': ref, 'baselineTag': tag,
             'managementUrl': config['origin'] + '/'}
@@ -157,6 +169,7 @@ def patch_inner(args, config, catalogue, source, ref):
     withdrawal = output.with_name(output.name + '-withdrawal')
     cli('policy', archive/'baseline', output, config['keys'], withdrawal, 'withdraw')
     upload_patch.upload(config['origin'], withdrawal/'manifest.json', withdrawal/'patch.bytecode')
+    trim_build_cache(project)
     manifest = read(output/'manifest.json')['manifest']
     return {'kind': 'patch', 'baselineId': receipt['baselineId'], 'release': receipt['release'],
             'platform': args.platform, 'patchId': manifest['patchId'], 'patchNumber': manifest.get('patchNumber'),
